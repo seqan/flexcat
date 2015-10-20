@@ -5,9 +5,11 @@ It has been extended and modified in the following ways
 
 - added support for multiple adapters
 - added support for 5'-end adapters
+- enhanced statistic output of adapter trimming
 - added feature to write trimmed sequences to id line
+- added feature to write statistics to file
 - switched the multithreading design from openMP to std::thread and semaphores
-- rewrote large parts of the program, with generic programming approach
+- rewrote most parts of the program, with a generic programming approach
 
 seqan_flexbar is implemented after seqan, if you use it, please cite 
 [1] Dodt, M.; Roehr, J.T.; Ahmed, R.; Dieterich, "
