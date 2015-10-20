@@ -1,6 +1,4 @@
 // ==========================================================================
-//                                SeqAn-Flexbar
-// ==========================================================================
 // Copyright (c) 2006-2015, Knut Reinert, FU Berlin
 // All rights reserved.
 //
@@ -33,7 +31,7 @@
 // ==========================================================================
 
 #include <algorithm>
-#include "flexbar++.h"
+#include "flexcat.h"
 
 #define SEQAN_PROFILE
 #ifdef SEQAN_ENABLE_DEBUG
@@ -366,11 +364,11 @@ private:
 void FilteringParserBuilder::addHeader(seqan::ArgumentParser & parser)
 {
     setCategory(parser, "NGS Quality Control");
-    setShortDescription(parser, "The SeqAn Filtering Toolkit of Flexbar++.");
+    setShortDescription(parser, "The SeqAn Filtering Toolkit of Flexcat.");
     addUsageLine(parser, " \\fI<READ_FILE1>\\fP \\fI<[READ_FILE2]>\\fP \\fI[OPTIONS]\\fP");
     addDescription(parser,
-       "This program is a sub-routine of Flexbar++ (a new implementation and extension of"
-       " the original flexbar[1]) and can be used to filter reads and apply "
+       "This program is a sub-routine of Flexcat (a new implementation and extension of"
+        " the original flexcat[1]) and can be used to filter reads and apply "
        "sequence independent trimming options");
 
     addDescription(parser, "[1] Dodt, M.; Roehr, J.T.; Ahmed, R.; Dieterich, "
@@ -413,10 +411,10 @@ private:
 void AdapterRemovalParserBuilder::addHeader(seqan::ArgumentParser & parser)
 {
     setCategory(parser, "NGS Quality Control");
-    setShortDescription(parser, "The Adapter Removal Toolkit of Flexbar++.");
+    setShortDescription(parser, "The Adapter Removal Toolkit of Flexcat.");
     addUsageLine(parser, " \\fI<READ_FILE1>\\fP \\fI<[READ_FILE2]>\\fP \\fI[OPTIONS]\\fP");
     addDescription(parser,
-        "This program is a sub-routine of Flexbar++ (a new implementation and extension of"
+        "This program is a sub-routine of Flexcat (a new implementation and extension of"
         " the original flexbar[1]) and removes adapter sequences from reads.");
 
     addDescription(parser, "[1] Dodt, M.; Roehr, J.T.; Ahmed, R.; Dieterich, "
@@ -461,10 +459,10 @@ private:
 void DemultiplexingParserBuilder::addHeader(seqan::ArgumentParser & parser)
 {
     setCategory(parser, "NGS Quality Control");
-    setShortDescription(parser, "The SeqAn Demultiplexing Toolkit of Flexbar++.");
+    setShortDescription(parser, "The SeqAn Demultiplexing Toolkit of Flexcat.");
     addUsageLine(parser, " \\fI<READ_FILE1>\\fP \\fI<[READ_FILE2]>\\fP \\fI[OPTIONS]\\fP");
     addDescription(parser,
-        "This program is a sub-routine of Flexbar++ (a new implementation and extension of"
+        "This program is a sub-routine of Flexcat (a new implementation and extension of"
         " the original flexbar[1]) and can be used for demultiplexing of reads.");
 
     addDescription(parser, "[1] Dodt, M.; Roehr, J.T.; Ahmed, R.; Dieterich, "
@@ -509,10 +507,10 @@ private:
 void QualityControlParserBuilder::addHeader(seqan::ArgumentParser & parser)
 {
     setCategory(parser, "NGS Quality Control");
-    setShortDescription(parser, "The SeqAn Quality Control Toolkit of Flexbar++.");
+    setShortDescription(parser, "The SeqAn Quality Control Toolkit of Flexcat.");
     addUsageLine(parser, " \\fI<READ_FILE1>\\fP \\fI<[READ_FILE2]>\\fP \\fI[OPTIONS]\\fP");
     addDescription(parser,
-        "This program is a sub-routine of Flexbar++ (a new implementation and extension of"
+        "This program is a sub-routine of Flexcat (a new implementation and extension of"
         " the original flexbar [1]) and can be used for quality controlling of reads.");
 
     addDescription(parser, "[1] Dodt, M.; Roehr, J.T.; Ahmed, R.; Dieterich, "
@@ -555,10 +553,10 @@ private:
 void AllStepsParserBuilder::addHeader(seqan::ArgumentParser & parser)
 {
     setCategory(parser, "NGS Quality Control");
-    setShortDescription(parser, "The Flexbar++ NGS-Data Processing Toolkit");
+    setShortDescription(parser, "The Flexcat NGS-Data Processing Toolkit");
     addUsageLine(parser, " \\fI<READ_FILE1>\\fP \\fI<[READ_FILE2]>\\fP \\fI[OPTIONS]\\fP");
     addDescription(parser,
-        "Flexbar++ is a toolkit for the processing of sequenced NGS reads. "
+        "Flexcat is a toolkit for the processing of sequenced NGS reads. "
         "It is a reimplementation and extension of the original Flexbar implementation of Dodt [1]. It is "
         "possible to demultiplex the reads and order them according to "
         "different kind of barcodes, to remove adapter contamination from "
@@ -583,7 +581,7 @@ void AllStepsParserBuilder::addHeader(seqan::ArgumentParser & parser)
 
 seqan::ArgumentParser AllStepsParserBuilder::build()
 {
-    seqan::ArgumentParser parser("Flexbar++");
+    seqan::ArgumentParser parser("Flexcat");
 
     addHeader(parser);
     addGeneralOptions(parser);
@@ -1296,8 +1294,6 @@ private:
 
 };
 
-//#undef _MULTITHREADED_IO
-
 // END FUNCTION DEFINITIONS ---------------------------------------------
 template<template <typename> class TRead, typename TSeq, typename TEsaFinder, typename TStats>
 int mainLoop(TRead<TSeq>, const ProgramParams& programParams, InputFileStreams& inputFileStreams, const DemultiplexingParams& demultiplexingParams, const ProcessingParams& processingParams, const AdapterTrimmingParams& adapterTrimmingParams,
@@ -1342,7 +1338,7 @@ int mainLoop(TRead<TSeq>, const ProgramParams& programParams, InputFileStreams& 
         if (numReadsRead == 0)
             break;
 
-        auto res = readProcessor.doProcessing(readSet.release());
+        auto res = readProcessor.doProcessing(std::move(readSet));
         generalStats += std::get<2>(*res);
 
         t1 = std::chrono::steady_clock::now();
@@ -1367,7 +1363,7 @@ int mainLoop(TRead<TSeq>, const ProgramParams& programParams, InputFileStreams& 
 // ----------------------------------------------------------------------------
 // Program entry point.
 
-int flexbarMain(int argc, char const ** argv)
+int flexcatMain(int argc, char const ** argv)
 {
     SEQAN_PROTIMESTART(loopTime);
     seqan::ArgumentParser parser = initParser();
@@ -1779,9 +1775,9 @@ int flexbarMain(int argc, char const ** argv)
     {
         std::fstream statFile;
 #ifdef _MSC_VER
-        statFile.open(std::string(seqan::toCString(outputStreams.getBaseFilename())) + "_flexbar_statistics.txt", std::fstream::out, _SH_DENYNO);
+        statFile.open(std::string(seqan::toCString(outputStreams.getBaseFilename())) + "_flexcat_statistics.txt", std::fstream::out, _SH_DENYNO);
 #else
-        statFile.open(std::string(seqan::toCString(outputStreams.getBaseFilename())) + "_flexbar_statistics.txt", std::fstream::out);
+        statFile.open(std::string(seqan::toCString(outputStreams.getBaseFilename())) + "_flexcat_statistics.txt", std::fstream::out);
 #endif
         printStatistics(programParams, generalStats, demultiplexingParams, adapterTrimmingParams, !isSet(parser, "ni"), statFile);
         statFile.close();

@@ -1,6 +1,4 @@
 // ==========================================================================
-//                                Flexbar++
-// ==========================================================================
 // Copyright (c) 2006-2015, Knut Reinert, FU Berlin
 // All rights reserved.
 //
@@ -33,8 +31,7 @@
 // Author: Sebastian Roskosch <serosko@zedat.fu-berlin.de>
 // ==========================================================================
 
-#ifndef FLEXBAR_H_
-#define FLEXBAR_H_
+#pragma once
 
 // ============================================================================
 // Tags, Classes, Enums
@@ -50,6 +47,4 @@ enum FlexiProgram {
 
 extern FlexiProgram flexiProgram;
 
-int flexbarMain(int argc, char const ** argv);
-
-#endif  // #ifndef SEQAN_FLEXBAR_H_
+int flexcatMain(int argc, char const ** argv);

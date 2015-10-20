@@ -1,4 +1,4 @@
-This is a fork of seqan_flexbar which can be found at
+This is a fork of seqan_flexbar* which can be found at
 https://github.com/seqan/seqan/tree/master/apps/seqan_flexbar
 
 It has been extended and modified in the following ways
@@ -9,4 +9,7 @@ It has been extended and modified in the following ways
 - switched the multithreading design from openMP to std::thread and semaphores
 - rewrote large parts of the program, with generic programming approach
 
-
+seqan_flexbar is implemented after seqan, if you use it, please cite 
+[1] Dodt, M.; Roehr, J.T.; Ahmed, R.; Dieterich, "
+C.  "FLEXBAR—Flexible Barcode and Adapter Processing for 
+Next-Generation Sequencing Platforms. Biology 2012, 1, 895-905.
