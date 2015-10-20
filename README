@@ -1,0 +1,12 @@
+This is a fork of seqan_flexbar which can be found at
+https://github.com/seqan/seqan/tree/master/apps/seqan_flexbar
+
+It has been extended and modified in the following ways
+
+- added support for multiple adapters
+- added support for 5'-end adapters
+- added feature to write trimmed sequences to id line
+- switched the multithreading design from openMP to std::thread and semaphores
+- rewrote large parts of the program, with generic programming approach
+
+
