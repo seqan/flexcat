@@ -3,13 +3,12 @@ project (Flexcat)
 message (STATUS "Configuring flexcat")
 
 set (SEQAN_APP_VERSION "1.0.0")
-set (Multithreading ON)
-if (Multithreading)
+if (LINUX_STATIC)
+    message (STATUS "  multithreading disabled")
+else()
     add_definitions ("-D_MULTITHREADED_IO")
     message (STATUS "  multithreading enabled")
-else()
-    message (STATUS "  multithreading disabled")
-endif(Multithreading)
+endif(LINUX_STATIC)
 
 # ----------------------------------------------------------------------------
 # Dependencies
@@ -68,6 +67,7 @@ foreach (TEST demultiplex trimming adapter general_processing)
 endforeach ()
 
 add_library (flexlib
+			 produce_transform_consume.h
              read.h
 			 read_reader.h
 			 read_writer.h

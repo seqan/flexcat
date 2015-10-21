@@ -63,6 +63,8 @@
 #include "read_reader.h"
 #include "read_writer.h"
 #include "read_processor.h"
+#include "produce_transform_consume.h"
+#include "semaphore.h"
 
 // Global variables are evil, this is for adaption and should be removed
 // after refactorization.
@@ -1217,45 +1219,17 @@ unsigned int readReads(std::vector<TRead<TSeq>>& reads, const unsigned int recor
     return i;
 }
 
-template <typename TRead, typename TFinder, typename TReadReader, typename TReadWriter>
-struct ReadProcessor
+template <typename TRead, typename TFinder>
+struct ReadTransformer
 {
     using TpReads = std::unique_ptr<std::vector<TRead>>;
-    using TWriteItem = typename TReadWriter::TWriteItem;
 
-    ReadProcessor(const ProgramParams& programParams, const ProcessingParams& processingParams, const DemultiplexingParams& demultiplexingParams, const AdapterTrimmingParams& adapterTrimmingParams,
-        const QualityTrimmingParams& qualityTrimmingParams, TFinder &finder, TReadReader& readReader, TReadWriter& readWriter, unsigned int sleepMS) : _programParams(programParams), _processingParams(processingParams), _demultiplexingParams(demultiplexingParams),
-        _adapterTrimmingParams(adapterTrimmingParams), _qualityTrimmingParams(qualityTrimmingParams), _finder(finder), _sleepMS(sleepMS), _readReader(readReader), _readWriter(readWriter), _threads(_programParams.num_threads){};
+    ReadTransformer(const ProgramParams& programParams, const ProcessingParams& processingParams, const DemultiplexingParams& demultiplexingParams, const AdapterTrimmingParams& adapterTrimmingParams,
+        const QualityTrimmingParams& qualityTrimmingParams, TFinder &finder) : 
+        _programParams(programParams), _processingParams(processingParams), _demultiplexingParams(demultiplexingParams),
+        _adapterTrimmingParams(adapterTrimmingParams), _qualityTrimmingParams(qualityTrimmingParams), _finder(finder){};
 
-    void start()
-    {
-        for (auto& _thread : _threads)
-        {
-            _thread = std::thread([this]() 
-            {
-                TpReads reads;
-                while (_readReader.getReads(reads))
-                {
-                    _readWriter.writeReads(doProcessing(std::move(reads)));
-                }
-            });
-        }
-    }
-    void shutDown()
-    {
-        for (auto& _thread : _threads)
-            if (_thread.joinable())
-                _thread.join();
-    }
-    bool finished() noexcept
-    {
-        for (auto& _thread : _threads)
-            if (_thread.joinable())
-                return false;
-        return true;
-    }
-
-    TWriteItem* doProcessing(TpReads reads)
+    auto operator()(TpReads reads)
     {
         GeneralStats generalStats(length(_demultiplexingParams.barcodeIds) + 1, _adapterTrimmingParams.adapters.size());
         generalStats.readCount = reads->size();
@@ -1276,7 +1250,7 @@ struct ReadProcessor
         // Postprocessing
         postprocessingStage(_processingParams, *reads, generalStats);
 
-        return new TWriteItem(std::make_tuple(std::move(reads), _demultiplexingParams.barcodeIds, generalStats));
+        return std::make_unique<std::tuple<TpReads, decltype(_demultiplexingParams.barcodeIds ), decltype(generalStats) >>(std::make_tuple(std::move(reads), _demultiplexingParams.barcodeIds, generalStats));
     }
 private:
     const ProgramParams& _programParams;
@@ -1285,14 +1259,9 @@ private:
     const AdapterTrimmingParams& _adapterTrimmingParams;
     const QualityTrimmingParams& _qualityTrimmingParams;
     const TFinder& _finder;
-    const unsigned int _sleepMS;
-
-    // main thread variables
-    TReadReader& _readReader;
-    TReadWriter& _readWriter;
-    std::vector<std::thread> _threads;
-
 };
+
+//#undef _MULTITHREADED_IO
 
 // END FUNCTION DEFINITIONS ---------------------------------------------
 template<template <typename> class TRead, typename TSeq, typename TEsaFinder, typename TStats>
@@ -1303,28 +1272,32 @@ int mainLoop(TRead<TSeq>, const ProgramParams& programParams, InputFileStreams& 
     const unsigned int threadIdleSleepTimeMS = 10;  // only used when useSemaphoreForIdleWaiting = false
     constexpr bool useSemaphoreForIdleWaiting = true;
     using TWriteItem = std::tuple < std::unique_ptr<std::vector<TRead<TSeq>>>, decltype(DemultiplexingParams::barcodeIds), GeneralStats>;
-    using ReadReader = ReadReader<TRead, TSeq, ProgramParams, InputFileStreams, useSemaphoreForIdleWaiting>;
-    using ReadWriter = ReadWriter<TRead, TSeq, TWriteItem, ProgramParams, OutputStreams, useSemaphoreForIdleWaiting>;
-    using ReadProcessor = ReadProcessor<TRead<TSeq>, TEsaFinder, ReadReader, ReadWriter>;
+    using TReadItem = std::vector<TRead<TSeq>>;
+    
+    using TReadReader = ReadReader<TRead, TSeq, ProgramParams, InputFileStreams>;
+    TReadReader readReader(inputFileStreams, programParams);
+    using Producer = ptc::Produce<TReadReader, TReadItem, LightweightSemaphore>;
+    Producer producer(readReader);
 
-    ReadWriter readWriter(programParams, outputStreams, threadIdleSleepTimeMS);
-    ReadReader readReader(programParams, inputFileStreams, threadIdleSleepTimeMS);
-    ReadProcessor readProcessor(programParams, processingParams, demultiplexingParams, adapterTrimmingParams, qualityTrimmingParams, esaFinder, readReader, readWriter, threadIdleSleepTimeMS);
+    using TTransformer = ReadTransformer<TRead<TSeq>, TEsaFinder>;
+    TTransformer transformer(programParams, processingParams, demultiplexingParams, adapterTrimmingParams, qualityTrimmingParams, esaFinder);
+
+    using TReadWriter = ReadWriter<TRead, TSeq, TWriteItem, OutputStreams, ProgramParams>;
+    TReadWriter readWriter(outputStreams, programParams);
+    using Consumer = ptc::Reduce<TReadWriter, TWriteItem, LightweightSemaphore>;
+    Consumer consumer(readWriter);
+    
+    auto ptc_unit = ptc::make_ptc_unit(producer, transformer, consumer, programParams.num_threads);
 
     TStats generalStats(length(demultiplexingParams.barcodeIds) + 1, adapterTrimmingParams.adapters.size());
 
 #ifdef _MULTITHREADED_IO
-    readReader.start();
-    readWriter.start();
-    readProcessor.start();
-    while (!(readReader.eof() && readReader.idle() && readProcessor.finished() && readWriter.idle())) // shortcut is used most of the time -> xxx.idle() get called only after eof is set
-    {
-        if (readReader.eof())
-        {
-            readProcessor.shutDown();
-        }
-        std::this_thread::sleep_for(std::chrono::milliseconds(10*threadIdleSleepTimeMS));
-    }
+    ptc_unit.start();
+    //while (!ptc_unit.finished()) // shortcut is used most of the time -> xxx.idle() get called only after eof is set
+    //{
+    //    std::this_thread::sleep_for(std::chrono::milliseconds(10*threadIdleSleepTimeMS));
+    //}
+    ptc_unit.waitForFinish();
     readWriter.getStats(stats);
 #else
     std::unique_ptr<std::vector<TRead<TSeq>>> readSet;
@@ -1338,7 +1311,7 @@ int mainLoop(TRead<TSeq>, const ProgramParams& programParams, InputFileStreams& 
         if (numReadsRead == 0)
             break;
 
-        auto res = readProcessor.doProcessing(std::move(readSet));
+        auto res = transformer.transform(std::move(readSet));
         generalStats += std::get<2>(*res);
 
         t1 = std::chrono::steady_clock::now();
@@ -1351,7 +1324,6 @@ int mainLoop(TRead<TSeq>, const ProgramParams& programParams, InputFileStreams& 
             std::cout << "\rreads processed: " << generalStats.readCount << "   (" << static_cast<int>(generalStats.readCount / deltaTime) << " Reads/s)";
         else
             std::cout << "\rreads processed: " << generalStats.readCount;
-        delete res;
     }
     stats = generalStats;
 #endif

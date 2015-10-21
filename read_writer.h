@@ -5,9 +5,6 @@
 #pragma once
 
 #include <string>
-#include <future>
-
-#include "semaphore.h"
 
 class OutputStreams
 {
@@ -140,131 +137,41 @@ public:
 };
 
 
-// writes read sets to hd and collects statistics, blocks if all slots are full
-template<template<typename> class TRead, typename TSeq, typename _TWriteItem, typename TProgramParams, typename TOutputStreams, bool useSemaphore>
+template<template<typename> class TRead, typename TSeq, typename TItem, typename TOutputStreams, typename TProgramParams>
 struct ReadWriter
 {
-public:
-    using TWriteItem = _TWriteItem;
-
 private:
-    const TProgramParams& _programParams;
     TOutputStreams& _outputStreams;
-    std::vector<std::atomic<TWriteItem*>> _tlsReadSets;
-    std::thread _thread;
-    std::atomic_bool _run;
-    unsigned int _sleepMS;
+    const TProgramParams& _programParams;
     std::chrono::time_point<std::chrono::steady_clock> _startTime;
     std::chrono::time_point<std::chrono::steady_clock> _lastScreenUpdate;
-    std::tuple_element_t<2, TWriteItem> _stats;
-    LightweightSemaphore readAvailableSemaphore;
-    LightweightSemaphore slotEmptySemaphore;
-
+    std::tuple_element_t<2, TItem> _stats;
 public:
-    ReadWriter(const TProgramParams& programParams, TOutputStreams& outputStreams, unsigned int sleepMS)
-        : _programParams(programParams), _outputStreams(outputStreams), _tlsReadSets(_programParams.num_threads + 1),
-        _run(false), _sleepMS(sleepMS), _startTime(std::chrono::steady_clock::now()), _lastScreenUpdate()
+    ReadWriter(TOutputStreams& outputStreams, const TProgramParams& programParams) :
+        _outputStreams(outputStreams), _programParams(programParams), _startTime(std::chrono::steady_clock::now()) {};
+
+    void operator()(TItem&& item)
     {
-        for (auto& readSet : _tlsReadSets)
-            readSet.store(nullptr);  // fill initialization does not work for atomics
-    }
-    ~ReadWriter()
-    {
-        _run = false;
-        if (_thread.joinable())
-            _thread.join();
-    }
-    void start()
-    {
-        _run = true;
-        _thread = std::thread([this]()
+        const auto t1 = std::chrono::steady_clock::now();
+        _outputStreams.writeSeqs(std::move(*std::get<0>(item)), std::get<1>(item));
+        _stats += std::get<2>(item);
+
+        // terminal output
+        const auto ioTime = std::chrono::duration_cast<std::chrono::duration<float>>(std::chrono::steady_clock::now() - t1).count();
+        _stats.ioTime += ioTime;
+        const auto deltaLastScreenUpdate = std::chrono::duration_cast<std::chrono::duration<float>>(std::chrono::steady_clock::now() - _lastScreenUpdate).count();
+        if (deltaLastScreenUpdate > 1)
         {
-            std::unique_ptr<TWriteItem> currentWriteItem;
-            while (_run)
-            {
-                bool nothingToDo = true;
-                for (auto& readSet : _tlsReadSets)
-                {
-                    if (readSet.load() != nullptr)
-                    {
-                        currentWriteItem.reset(readSet.load());
-                        readSet.store(nullptr); // make the slot free again
-                        if (useSemaphore)
-                            slotEmptySemaphore.signal();
-                        nothingToDo = false;
-
-                        //std::this_thread::sleep_for(std::chrono::milliseconds(1));  // used for debuggin slow hd case
-
-                        const auto t1 = std::chrono::steady_clock::now();
-                        _outputStreams.writeSeqs(std::move(*std::get<0>(*currentWriteItem)), std::get<1>(*currentWriteItem));
-                        _stats += std::get<2>(*currentWriteItem);
-
-                        // terminal output
-                        const auto ioTime = std::chrono::duration_cast<std::chrono::duration<float>>(std::chrono::steady_clock::now() - t1).count();
-                        _stats.ioTime += ioTime;
-                        const auto deltaLastScreenUpdate = std::chrono::duration_cast<std::chrono::duration<float>>(std::chrono::steady_clock::now() - _lastScreenUpdate).count();
-                        if (deltaLastScreenUpdate > 1)
-                        {
-                            const auto deltaTime = std::chrono::duration_cast<std::chrono::duration<float>>(std::chrono::steady_clock::now() - _startTime).count();
-                            if (_programParams.showSpeed)
-                                std::cout << "\rReads processed: " << _stats.readCount << "   (" << static_cast<int>(_stats.readCount / deltaTime) << " Reads/s)";
-                            else
-                                std::cout << "\rReads processed: " << _stats.readCount;
-                            _lastScreenUpdate = std::chrono::steady_clock::now();
-                        }
-                    }
-                }
-                if (nothingToDo)
-                {
-                    //std::cout << std::this_thread::get_id() << "-4" << std::endl;
-                    if (useSemaphore)
-                    {
-                        readAvailableSemaphore.wait();
-                    }
-                    else
-                        std::this_thread::sleep_for(std::chrono::milliseconds(_sleepMS));
-                }
-            }
-        });
-    }
-    void writeReads(TWriteItem* writeItem)     // blocks until item could be added
-    {
-        while (true)
-        {
-            for (auto& reads : _tlsReadSets)
-            {
-                if (reads.load() == nullptr)
-                {
-                    TWriteItem* temp = nullptr;
-                    if (reads.compare_exchange_strong(temp, writeItem))
-                    {
-                        if (useSemaphore)
-                            readAvailableSemaphore.signal();
-                        return;
-                    }
-                }
-            }
-            //std::cout << std::this_thread::get_id() << "-3" << std::endl;
-            if (useSemaphore)
-                slotEmptySemaphore.wait();
+            const auto deltaTime = std::chrono::duration_cast<std::chrono::duration<float>>(std::chrono::steady_clock::now() - _startTime).count();
+            if (_programParams.showSpeed)
+                std::cout << "\rReads processed: " << _stats.readCount << "   (" << static_cast<int>(_stats.readCount / deltaTime) << " Reads/s)";
             else
-                std::this_thread::sleep_for(std::chrono::milliseconds(_sleepMS));
+                std::cout << "\rReads processed: " << _stats.readCount;
+            _lastScreenUpdate = std::chrono::steady_clock::now();
         }
     }
-    void getStats(std::tuple_element_t<2, TWriteItem>& stats)
+    void getStats(std::tuple_element_t<2, TItem>& stats)
     {
-        _run = false;
-        if (useSemaphore)
-            readAvailableSemaphore.signal();
-        if (_thread.joinable())
-            _thread.join();
         stats = _stats;
-    }
-    bool idle() noexcept
-    {
-        for (auto& readSet : _tlsReadSets)
-            if (readSet.load() != nullptr)
-                return false;
-        return true;
     }
 };

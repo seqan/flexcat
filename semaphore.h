@@ -197,7 +197,7 @@ public:
     bool tryWait()
     {
         int oldCount = m_count.load(std::memory_order_relaxed);
-        return (oldCount > 0 && m_count.compare_exchange_strong(oldCount, oldCount - 1, std::memory_order_acquire));
+        return (oldCount > 0 && m_count.compare_exchange_strong(oldCount, oldCount - 1, std::memory_order_acquire));    // memory fence
     }
 
     void wait()
@@ -208,11 +208,11 @@ public:
 
     void signal(int count = 1)
     {
-        int oldCount = m_count.fetch_add(count, std::memory_order_release);
-        int toRelease = -oldCount < count ? -oldCount : count;
+        const int oldCount = m_count.fetch_add(count, std::memory_order_release);  // memory fence
+        const int toRelease = -oldCount < count ? -oldCount : count;
         if (toRelease > 0)
         {
-            m_sema.signal(toRelease);
+            m_sema.signal(toRelease);   // memory fence
         }
     }
 };
