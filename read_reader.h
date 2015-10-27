@@ -18,8 +18,9 @@ private:
 public:
     ReadReader(TInputFileStreams& inputFileStreams, const TProgramParams& programParams)
         : _inputFileStreams(inputFileStreams), _programParams(programParams), _numReads(0) {};
-    bool operator()(std::unique_ptr<std::vector<TRead<TSeq>>>& item)
+    std::unique_ptr<std::vector<TRead<TSeq>>> operator()()
     {
+        auto item = std::make_unique<std::vector<TRead<TSeq>>>();
         try {
             readReads(*item, _programParams.records, _inputFileStreams);
         }
@@ -29,9 +30,9 @@ public:
         }
         loadMultiplex(*item, _programParams.records, _inputFileStreams.fileStreamMultiplex);
         _numReads += item->size();
-        if (item->empty() || _numReads >= _programParams.firstReads)    // no more reads available or maximum read number reached -> dont do further reads
-            return false;
-        return true;
+        if (item->empty() || _numReads > _programParams.firstReads)    // no more reads available or maximum read number reached -> dont do further reads
+            item.release();
+        return std::move(item);
     }
 };
 

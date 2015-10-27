@@ -1,4 +1,6 @@
 //---------------------------------------------------------
+// This code is from Jeff Preshing, props to him
+// also watch his very interesting CPPCON2014 talk about parallel programming
 // For conditions of distribution and use, see
 // https://github.com/preshing/cpp11-on-multicore/blob/master/LICENSE
 //---------------------------------------------------------

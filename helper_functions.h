@@ -16,7 +16,11 @@
 #include "read.h"
 
 template<typename T>
-struct function_traits;
+struct function_traits
+{
+    static_assert(sizeof(T) == 0,
+        "function_traits<T>: T is not a function type");
+};
 
 template<typename R, typename ...Args>
 struct function_traits<std::function<R(Args...)>>

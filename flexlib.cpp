@@ -63,8 +63,7 @@
 #include "read_reader.h"
 #include "read_writer.h"
 #include "read_processor.h"
-#include "produce_transform_consume.h"
-#include "semaphore.h"
+#include "ptc.h"
 
 // Global variables are evil, this is for adaption and should be removed
 // after refactorization.
@@ -112,6 +111,10 @@ void ArgumentParserBuilder::addGeneralOptions(seqan::ArgumentParser & parser)
     seqan::ArgParseOption noQualOpt = seqan::ArgParseOption(
         "nq", "noQualities", "Force .fa format for output files.");
         addOption(parser, noQualOpt);
+
+    seqan::ArgParseOption orderedOpt = seqan::ArgParseOption(
+        "od", "ordered", "Keep reads in order. Needs -r 1 option to work properly.");
+    addOption(parser, orderedOpt);
 
 	seqan::ArgParseOption firstReadsOpt = seqan::ArgParseOption(
 			"fr", "reads", "Process only first n reads.",
@@ -701,8 +704,9 @@ struct ProgramParams
     unsigned int firstReads;
     unsigned records;
     unsigned int num_threads;
+    bool ordered;
 
-    ProgramParams() : fileCount(0), showSpeed(false), firstReads(0), records(0), num_threads(0) {};
+    ProgramParams() : fileCount(0), showSpeed(false), firstReads(0), records(0), num_threads(0), ordered(false) {};
 };
 
 
@@ -925,6 +929,7 @@ int loadProgramParams(seqan::ArgumentParser const & parser, ProgramParams& param
     omp_set_num_threads(params.num_threads);
 
     getOptionValue(params.records, parser, "r");
+    getOptionValue(params.ordered, parser, "od");
     return 0;
 }
 
@@ -1219,38 +1224,30 @@ unsigned int readReads(std::vector<TRead<TSeq>>& reads, const unsigned int recor
     return i;
 }
 
-template <typename TRead, typename TFinder>
+
+// strange bug probably in visual studio, this is not working, but the lambda works
+template <typename TFinder>
 struct ReadTransformer
 {
-    using TpReads = std::unique_ptr<std::vector<TRead>>;
-
     ReadTransformer(const ProgramParams& programParams, const ProcessingParams& processingParams, const DemultiplexingParams& demultiplexingParams, const AdapterTrimmingParams& adapterTrimmingParams,
         const QualityTrimmingParams& qualityTrimmingParams, TFinder &finder) : 
         _programParams(programParams), _processingParams(processingParams), _demultiplexingParams(demultiplexingParams),
         _adapterTrimmingParams(adapterTrimmingParams), _qualityTrimmingParams(qualityTrimmingParams), _finder(finder){};
 
-    auto operator()(TpReads reads)
+    template <typename TItem>
+    auto operator()(TItem&& reads)
     {
         GeneralStats generalStats(length(_demultiplexingParams.barcodeIds) + 1, _adapterTrimmingParams.adapters.size());
-        generalStats.readCount = reads->size();
-        
-        // Preprocessing and Filtering
-        preprocessingStage(_processingParams, *reads, generalStats);
-
-        // Demultiplexing
-        if (demultiplexingStage(_demultiplexingParams, *reads, _finder, generalStats) != 0)
+        generalStats.readCount = reads.size();
+        preprocessingStage(_processingParams, reads, generalStats);
+        if (demultiplexingStage(_demultiplexingParams, reads, _finder, generalStats) != 0)
             std::cerr << "DemultiplexingStage error" << std::endl;
+        adapterTrimmingStage(_adapterTrimmingParams, reads, generalStats);
+        qualityTrimmingStage(_qualityTrimmingParams, reads, generalStats);
+        postprocessingStage(_processingParams, reads, generalStats);
 
-        // Adapter trimming
-        adapterTrimmingStage(_adapterTrimmingParams, *reads, generalStats);
-
-        // Quality trimming
-        qualityTrimmingStage(_qualityTrimmingParams, *reads, generalStats);
-
-        // Postprocessing
-        postprocessingStage(_processingParams, *reads, generalStats);
-
-        return std::make_unique<std::tuple<TpReads, decltype(_demultiplexingParams.barcodeIds ), decltype(generalStats) >>(std::make_tuple(std::move(reads), _demultiplexingParams.barcodeIds, generalStats));
+        auto ret = std::make_unique<std::remove_reference_t<decltype(reads)>>(std::move(reads));
+        return std::make_unique<std::tuple<std::unique_ptr<std::remove_reference_t<decltype(reads)>>, decltype(_demultiplexingParams.barcodeIds), decltype(generalStats) >>(std::make_tuple(std::move(ret), _demultiplexingParams.barcodeIds, generalStats));
     }
 private:
     const ProgramParams& _programParams;
@@ -1261,72 +1258,99 @@ private:
     const TFinder& _finder;
 };
 
-//#undef _MULTITHREADED_IO
-
 // END FUNCTION DEFINITIONS ---------------------------------------------
 template<template <typename> class TRead, typename TSeq, typename TEsaFinder, typename TStats>
 int mainLoop(TRead<TSeq>, const ProgramParams& programParams, InputFileStreams& inputFileStreams, const DemultiplexingParams& demultiplexingParams, const ProcessingParams& processingParams, const AdapterTrimmingParams& adapterTrimmingParams,
     const QualityTrimmingParams& qualityTrimmingParams, TEsaFinder& esaFinder,
     OutputStreams& outputStreams, TStats& stats)
 {
-    const unsigned int threadIdleSleepTimeMS = 10;  // only used when useSemaphoreForIdleWaiting = false
-    constexpr bool useSemaphoreForIdleWaiting = true;
-    using TWriteItem = std::tuple < std::unique_ptr<std::vector<TRead<TSeq>>>, decltype(DemultiplexingParams::barcodeIds), GeneralStats>;
-    using TReadItem = std::vector<TRead<TSeq>>;
-    
     using TReadReader = ReadReader<TRead, TSeq, ProgramParams, InputFileStreams>;
     TReadReader readReader(inputFileStreams, programParams);
-    using Producer = ptc::Produce<TReadReader, TReadItem, LightweightSemaphore>;
-    Producer producer(readReader);
 
-    using TTransformer = ReadTransformer<TRead<TSeq>, TEsaFinder>;
+    using TTransformer = ReadTransformer<TEsaFinder>;
     TTransformer transformer(programParams, processingParams, demultiplexingParams, adapterTrimmingParams, qualityTrimmingParams, esaFinder);
 
-    using TReadWriter = ReadWriter<TRead, TSeq, TWriteItem, OutputStreams, ProgramParams>;
+    using TReadWriter = ReadWriter<OutputStreams, ProgramParams>;
     TReadWriter readWriter(outputStreams, programParams);
-    using Consumer = ptc::Reduce<TReadWriter, TWriteItem, LightweightSemaphore>;
-    Consumer consumer(readWriter);
-    
-    auto ptc_unit = ptc::make_ptc_unit(producer, transformer, consumer, programParams.num_threads);
+
+    //unsigned int numReads = 0;
+    //auto readReader2 = [&programParams, &inputFileStreams, &numReads]() {
+    //    auto item = std::make_unique<std::vector<TRead<TSeq>>>();
+    //    readReads(*item, programParams.records, inputFileStreams);
+    //    loadMultiplex(*item, programParams.records, inputFileStreams.fileStreamMultiplex);
+    //    numReads += item->size();
+    //    if (item->empty() || numReads >= programParams.firstReads)    // no more reads available or maximum read number reached -> dont do further reads
+    //        item.release();
+    //    return std::move(item);
+    //};
+
+    auto transformer2 = [&](auto reads){
+        GeneralStats generalStats(length(demultiplexingParams.barcodeIds) + 1, adapterTrimmingParams.adapters.size());
+        generalStats.readCount = reads->size();
+        preprocessingStage(processingParams, *reads, generalStats);
+        if (demultiplexingStage(demultiplexingParams, *reads, esaFinder, generalStats) != 0)
+            std::cerr << "DemultiplexingStage error" << std::endl;
+        adapterTrimmingStage(adapterTrimmingParams, *reads, generalStats);
+        qualityTrimmingStage(qualityTrimmingParams, *reads, generalStats);
+        postprocessingStage(processingParams, *reads, generalStats);
+        return std::make_unique<std::tuple<decltype(reads), decltype(demultiplexingParams.barcodeIds), decltype(generalStats) >>(std::make_tuple(std::move(reads), demultiplexingParams.barcodeIds, generalStats));
+    };
+
 
     TStats generalStats(length(demultiplexingParams.barcodeIds) + 1, adapterTrimmingParams.adapters.size());
 
-#ifdef _MULTITHREADED_IO
-    ptc_unit.start();
-    //while (!ptc_unit.finished()) // shortcut is used most of the time -> xxx.idle() get called only after eof is set
-    //{
-    //    std::this_thread::sleep_for(std::chrono::milliseconds(10*threadIdleSleepTimeMS));
-    //}
-    ptc_unit.waitForFinish();
-    readWriter.getStats(stats);
-#else
-    std::unique_ptr<std::vector<TRead<TSeq>>> readSet;
-    const auto tMain = std::chrono::steady_clock::now();
-    while (generalStats.readCount < programParams.firstReads)
+    if (programParams.num_threads > 1)
     {
-        readSet.reset(new std::vector<TRead<TSeq>>(programParams.records));
-        auto t1 = std::chrono::steady_clock::now();
-        const auto numReadsRead = readReads(*readSet, programParams.records, inputFileStreams);
-        generalStats.ioTime += std::chrono::duration_cast<std::chrono::duration<float>>(std::chrono::steady_clock::now() - t1).count();
-        if (numReadsRead == 0)
-            break;
-
-        auto res = transformer.transform(std::move(readSet));
-        generalStats += std::get<2>(*res);
-
-        t1 = std::chrono::steady_clock::now();
-        outputStreams.writeSeqs(std::move(*(std::get<0>(*res))), demultiplexingParams.barcodeIds);
-        generalStats.ioTime += std::chrono::duration_cast<std::chrono::duration<float>>(std::chrono::steady_clock::now() - t1).count();
-
-        // Print information
-        const auto deltaTime = std::chrono::duration_cast<std::chrono::duration<float>>(std::chrono::steady_clock::now() - tMain).count();
-        if (programParams.showSpeed)
-            std::cout << "\rreads processed: " << generalStats.readCount << "   (" << static_cast<int>(generalStats.readCount / deltaTime) << " Reads/s)";
+        if (programParams.ordered)
+        {
+            auto ptc_unit = ptc::ordered_ptc(readReader, transformer2, readWriter, programParams.num_threads);
+            ptc_unit->start();
+            auto f = ptc_unit->get_future();
+            stats = f.get();
+        }
         else
-            std::cout << "\rreads processed: " << generalStats.readCount;
+        {
+            auto ptc_unit = ptc::unordered_ptc(readReader, transformer2, readWriter, programParams.num_threads);
+            ptc_unit->start();
+            auto f = ptc_unit->get_future();
+            stats = f.get();
+        }
+        //while (!ptc_unit.finished()) // shortcut is used most of the time -> xxx.idle() get called only after eof is set
+        //{
+        //    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        //}
+        //ptc_unit->wait();
+        //readWriter.getStats(stats);
     }
-    stats = generalStats;
-#endif
+    else
+    {
+        std::unique_ptr<std::vector<TRead<TSeq>>> readSet;
+        const auto tMain = std::chrono::steady_clock::now();
+        while (generalStats.readCount < programParams.firstReads)
+        {
+            readSet.reset(new std::vector<TRead<TSeq>>(programParams.records));
+            auto t1 = std::chrono::steady_clock::now();
+            const auto numReadsRead = readReads(*readSet, programParams.records, inputFileStreams);
+            generalStats.ioTime += std::chrono::duration_cast<std::chrono::duration<float>>(std::chrono::steady_clock::now() - t1).count();
+            if (numReadsRead == 0)
+                break;
+
+            auto res = transformer(std::move(*readSet));
+            generalStats += std::get<2>(*res);
+
+            t1 = std::chrono::steady_clock::now();
+            outputStreams.writeSeqs(std::move(*(std::get<0>(*res))), demultiplexingParams.barcodeIds);
+            generalStats.ioTime += std::chrono::duration_cast<std::chrono::duration<float>>(std::chrono::steady_clock::now() - t1).count();
+
+            // Print information
+            const auto deltaTime = std::chrono::duration_cast<std::chrono::duration<float>>(std::chrono::steady_clock::now() - tMain).count();
+            if (programParams.showSpeed)
+                std::cout << "\rreads processed: " << generalStats.readCount << "   (" << static_cast<int>(generalStats.readCount / deltaTime) << " Reads/s)";
+            else
+                std::cout << "\rreads processed: " << generalStats.readCount;
+        }
+        stats = generalStats;
+    }
     return 0;
 }
 
@@ -1571,6 +1595,10 @@ int flexcatMain(int argc, char const ** argv)
             std::cout << "\tForce no-quality output: NO\n";
         }
         std::cout << "\tNumber of threads: " << programParams.num_threads << "\n";
+        if (programParams.ordered)
+            std::cout << "\tOrder policy: ordered" << std::endl;
+        else
+            std::cout << "\tOrder policy: unordered" << std::endl;
         if(flexiProgram == ADAPTER_REMOVAL || flexiProgram == QUALITY_CONTROL|| flexiProgram == ALL_STEPS)
         {
             if (isSet(parser, "t"))

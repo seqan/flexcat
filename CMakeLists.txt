@@ -3,12 +3,6 @@ project (Flexcat)
 message (STATUS "Configuring flexcat")
 
 set (SEQAN_APP_VERSION "1.0.0")
-if (LINUX_STATIC)
-    message (STATUS "  multithreading disabled")
-else()
-    add_definitions ("-D_MULTITHREADED_IO")
-    message (STATUS "  multithreading enabled")
-endif(LINUX_STATIC)
 
 # ----------------------------------------------------------------------------
 # Dependencies
@@ -67,7 +61,7 @@ foreach (TEST demultiplex trimming adapter general_processing)
 endforeach ()
 
 add_library (flexlib
-			 produce_transform_consume.h
+			 ptc.h
              read.h
 			 read_reader.h
 			 read_writer.h
@@ -142,7 +136,6 @@ if (SEQAN_BUILD_SYSTEM STREQUAL "APP:flexcat")
   set (CPACK_PACKAGE_NAME "flexcat")
   set (CPACK_PACKAGE_DESCRIPTION_SUMMARY "Flexcat - Flexible barcode and adapter removal for NGS")
   set (CPACK_DEBIAN_PACKAGE_MAINTAINER "Benjamin Menkuec <benjamin@menkuec.de>")
-  set (CPACK_PACKAGE_VENDOR "SeqAn Team, FU Berlin")
 
   seqan_configure_cpack_app (flexcat "flexcat")
 endif (SEQAN_BUILD_SYSTEM STREQUAL "APP:flexcat")
