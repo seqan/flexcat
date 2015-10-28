@@ -21,16 +21,22 @@ public:
     std::unique_ptr<std::vector<TRead<TSeq>>> operator()()
     {
         auto item = std::make_unique<std::vector<TRead<TSeq>>>();
-        try {
+        if (_numReads > _programParams.firstReads)    // maximum read number reached -> dont do further reads
+        {
+            item.release();
+            return std::move(item);
+        }
+
+        //try {
             readReads(*item, _programParams.records, _inputFileStreams);
-        }
-        catch (std::exception& e) {
-            std::cout << "exception while reading :" << e.what() << " after read " << _numReads << std::endl;
-            throw(e);
-        }
+        //}
+        //catch (std::exception& e) {
+        //    std::cout << "exception while reading :" << e.what() << " after read " << _numReads << std::endl;
+        //    throw(e);
+        //}
         loadMultiplex(*item, _programParams.records, _inputFileStreams.fileStreamMultiplex);
         _numReads += item->size();
-        if (item->empty() || _numReads > _programParams.firstReads)    // no more reads available or maximum read number reached -> dont do further reads
+        if (item->empty())    // no more reads available -> dont do further reads
             item.release();
         return std::move(item);
     }

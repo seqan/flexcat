@@ -62,7 +62,6 @@
 #include "read.h"
 #include "read_reader.h"
 #include "read_writer.h"
-#include "read_processor.h"
 #include "ptc.h"
 
 // Global variables are evil, this is for adaption and should be removed
@@ -1273,17 +1272,6 @@ int mainLoop(TRead<TSeq>, const ProgramParams& programParams, InputFileStreams& 
     using TReadWriter = ReadWriter<OutputStreams, ProgramParams>;
     TReadWriter readWriter(outputStreams, programParams);
 
-    //unsigned int numReads = 0;
-    //auto readReader2 = [&programParams, &inputFileStreams, &numReads]() {
-    //    auto item = std::make_unique<std::vector<TRead<TSeq>>>();
-    //    readReads(*item, programParams.records, inputFileStreams);
-    //    loadMultiplex(*item, programParams.records, inputFileStreams.fileStreamMultiplex);
-    //    numReads += item->size();
-    //    if (item->empty() || numReads >= programParams.firstReads)    // no more reads available or maximum read number reached -> dont do further reads
-    //        item.release();
-    //    return std::move(item);
-    //};
-
     auto transformer2 = [&](auto reads){
         GeneralStats generalStats(length(demultiplexingParams.barcodeIds) + 1, adapterTrimmingParams.adapters.size());
         generalStats.readCount = reads->size();
@@ -1295,7 +1283,6 @@ int mainLoop(TRead<TSeq>, const ProgramParams& programParams, InputFileStreams& 
         postprocessingStage(processingParams, *reads, generalStats);
         return std::make_unique<std::tuple<decltype(reads), decltype(demultiplexingParams.barcodeIds), decltype(generalStats) >>(std::make_tuple(std::move(reads), demultiplexingParams.barcodeIds, generalStats));
     };
-
 
     TStats generalStats(length(demultiplexingParams.barcodeIds) + 1, adapterTrimmingParams.adapters.size());
 
