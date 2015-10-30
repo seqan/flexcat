@@ -31,7 +31,7 @@
 // ==========================================================================
 // Author: Benjamin Menkuec <benjamin@menkuec.de>
 // Author: Sebastian Roskosch <serosko@zedat.fu-berlin.de>
-// ==========================================================================W
+// ==========================================================================
 
 #ifndef ADAPTERTRIMMING_H
 #define ADAPTERTRIMMING_H
@@ -144,6 +144,16 @@ struct AdapterMatchSettings
 };
 
 
+struct AdapterTrimmingParams
+{
+    bool pairedNoAdapterFile;
+    bool run;
+    AdapterSet adapters;
+    AdapterMatchSettings mode;
+    bool tag;
+    AdapterTrimmingParams() : pairedNoAdapterFile(false), run(false), tag(false) {};
+};
+
 // ============================================================================
 // Functions
 // ============================================================================
@@ -196,6 +206,14 @@ void alignPair(std::pair<unsigned, seqan::Align<TSeq> >& ret, const TSeq& seq1, 
     // banded alignment
     const int val1 = -leftOverhang;
     const int val2 = length(seq1) - length(seq2) + rightOverhang;
+    /*
+    sequence is too short, return -1
+    */
+    if (val2 < val1)
+    {
+        ret.first = -1;
+        return;
+    }
     ret.first = globalAlignment(ret.second, adapterScore, config, val1, val2, seqan::LinearGaps());
 }
 

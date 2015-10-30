@@ -194,6 +194,7 @@ SEQAN_DEFINE_TEST(strip_adapter_test)
     // overlap=4, error_rate = 0.2, times = 1
     AdapterMatchSettings matchSettings(4, 0, 0.2, 0, 1);
     AdapterTrimmingStats stats;
+    stats.numRemoved.resize(1);
  
     int removed = stripAdapter(read.seq, stats, AdapterSet{ AdapterItem(ada, AdapterItem::end3, 0,0, false, false) }, matchSettings, StripAdapterDirection<adapterDirection::forward>());
 	SEQAN_ASSERT_EQ(removed, 5);

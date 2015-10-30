@@ -47,6 +47,23 @@
 // Tags, Classes, Enums
 // ============================================================================
 
+enum class TrimmingMode
+{
+    E_WINDOW,
+    E_BWA,
+    E_TAIL
+};
+
+struct QualityTrimmingParams
+{
+    TrimmingMode trim_mode;
+    int cutoff;
+    int min_length;
+    bool run;
+    bool tag;
+    QualityTrimmingParams() : trim_mode(TrimmingMode::E_WINDOW), cutoff(-1), min_length(1), run(false), tag(false) {};
+};
+
 
 // ============================================================================
 // Functions

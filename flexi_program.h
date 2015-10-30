@@ -33,3 +33,11 @@
 // ==========================================================================
 
 #pragma once
+
+enum class FlexiProgram {
+    ADAPTER_REMOVAL,
+    DEMULTIPLEXING,
+    FILTERING,
+    QUALITY_CONTROL,
+    ALL_STEPS
+};

@@ -61,19 +61,22 @@ foreach (TEST demultiplex trimming adapter general_processing)
 endforeach ()
 
 add_library (flexlib
+			 flexlib.cpp
+			 flexlib.h
+			 flexcat.h
+			 flexi_program.h
 			 ptc.h
              read.h
-			 read_reader.h
 			 read_writer.h
 			 semaphore.h
              demultiplex.h
+			 argument_parser.h
              read_trimming.h
              adapter_trimming.h
              general_processing.h
              helper_functions.h
 			 general_stats.h
-             flexcat.h
-             flexlib.cpp)
+             )
 target_link_libraries (flexlib ${SEQAN_LIBRARIES})
 
 set (KNIME_FLEX_NODES sflexQC sflexAR sflexDMulti sflexFilter)
@@ -83,10 +86,10 @@ foreach (TARGET ${KNIME_FLEX_NODES} flexcat)
     target_link_libraries (${TARGET} flexlib ${SEQAN_LIBRARIES})
 endforeach ()
 
-set_target_properties (sflexQC PROPERTIES COMPILE_DEFINITIONS "FLEX_PROG=QUALITY_CONTROL")
-set_target_properties (sflexAR PROPERTIES COMPILE_DEFINITIONS "FLEX_PROG=ADAPTER_REMOVAL")
-set_target_properties (sflexDMulti PROPERTIES COMPILE_DEFINITIONS "FLEX_PROG=DEMULTIPLEXING")
-set_target_properties (sflexFilter PROPERTIES COMPILE_DEFINITIONS "FLEX_PROG=FILTERING")
+set_target_properties (sflexQC PROPERTIES COMPILE_DEFINITIONS "FLEX_PROG=FlexiProgram::QUALITY_CONTROL")
+set_target_properties (sflexAR PROPERTIES COMPILE_DEFINITIONS "FLEX_PROG=FlexiProgram::ADAPTER_REMOVAL")
+set_target_properties (sflexDMulti PROPERTIES COMPILE_DEFINITIONS "FLEX_PROG=FlexiProgram::DEMULTIPLEXING")
+set_target_properties (sflexFilter PROPERTIES COMPILE_DEFINITIONS "FLEX_PROG=FlexiProgram::FILTERING")
 
 # Set CXX flags 
 if (NOT MSVC)

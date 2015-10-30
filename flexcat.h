@@ -37,14 +37,6 @@
 // Tags, Classes, Enums
 // ============================================================================
 
-enum FlexiProgram {
-    ADAPTER_REMOVAL,
-    DEMULTIPLEXING,
-    FILTERING,
-    QUALITY_CONTROL,
-    ALL_STEPS
-};
+#include "flexi_program.h"
 
-extern FlexiProgram flexiProgram;
-
-int flexcatMain(int argc, char const ** argv);
+int flexcatMain(const FlexiProgram flexiProgram, int argc, char const ** argv);

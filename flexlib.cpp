@@ -28,10 +28,10 @@
 //
 // ==========================================================================
 // Author: Benjamin Menkuec <benjamin@menkuec.de>
+// Author: Sebastian Roskosch <serosko@zedat.fu-berlin.de>
 // ==========================================================================
 
 #include <algorithm>
-#include "flexcat.h"
 
 #define SEQAN_PROFILE
 #ifdef SEQAN_ENABLE_DEBUG
@@ -54,690 +54,25 @@
 // Headers for creating subdirectories.
 #include <errno.h>
 
+#include "flexcat.h"
+#include "flexlib.h"
+#include "argument_parser.h"
 #include "read_trimming.h"
 #include "adapter_trimming.h"
 #include "demultiplex.h"
 #include "general_processing.h"
 #include "helper_functions.h"
 #include "read.h"
-#include "read_reader.h"
 #include "read_writer.h"
 #include "ptc.h"
 
-// Global variables are evil, this is for adaption and should be removed
-// after refactorization.
-FlexiProgram flexiProgram;
-
 using namespace seqan;
-
-// --------------------------------------------------------------------------
-// Class ArgumentParserBuilder
-// --------------------------------------------------------------------------
-
-class ArgumentParserBuilder
-{
-public:
-    virtual seqan::ArgumentParser build() = 0;
-
-protected:
-    void addGeneralOptions(seqan::ArgumentParser & parser);
-    void addFilteringOptions(seqan::ArgumentParser & parser);
-    void addDemultiplexingOptions(seqan::ArgumentParser & parser);
-    void addAdapterTrimmingOptions(seqan::ArgumentParser & parser);
-    void addReadTrimmingOptions(seqan::ArgumentParser & parser);
-};
-
-void ArgumentParserBuilder::addGeneralOptions(seqan::ArgumentParser & parser)
-{
-    // GENERAL OPTIONS -----------------------------------------
-    addSection(parser, "General Options");
-
-    seqan::ArgParseOption showSpeedOpt = seqan::ArgParseOption(
-        "ss", "showSpeed", "Show speed in base pairs per second.");
-    addOption(parser, showSpeedOpt);
-
-    seqan::ArgParseOption writeStatsOpt = seqan::ArgParseOption(
-        "st", "writeStats", "Write statistics into a file");
-    addOption(parser, writeStatsOpt);
-    
-    seqan::ArgParseOption recordOpt = seqan::ArgParseOption(
-        "r", "records", "Number of records to be read in one run. Adjust this so that one batch of read can fit into your CPU cache.",
-        seqan::ArgParseOption::INTEGER, "VALUE");
-    setDefaultValue(recordOpt, 1000);
-    setMinValue(recordOpt, "1");
-    addOption(parser, recordOpt);
-
-    seqan::ArgParseOption noQualOpt = seqan::ArgParseOption(
-        "nq", "noQualities", "Force .fa format for output files.");
-        addOption(parser, noQualOpt);
-
-    seqan::ArgParseOption orderedOpt = seqan::ArgParseOption(
-        "od", "ordered", "Keep reads in order. Needs -r 1 option to work properly.");
-    addOption(parser, orderedOpt);
-
-	seqan::ArgParseOption firstReadsOpt = seqan::ArgParseOption(
-			"fr", "reads", "Process only first n reads.",
-			seqan::ArgParseOption::INTEGER, "VALUE");
-	setMinValue(firstReadsOpt, "1");
-	addOption(parser, firstReadsOpt);
-
-    seqan::ArgParseOption threadOpt = seqan::ArgParseOption(
-        "tnum", "threads", "Number of threads used.",
-        seqan::ArgParseOption::INTEGER, "THREADS");
-    setDefaultValue(threadOpt, 1);
-    setMinValue(threadOpt, "1");
-    addOption(parser, threadOpt);
-
-    if(flexiProgram == ADAPTER_REMOVAL || flexiProgram == FILTERING || flexiProgram == QUALITY_CONTROL)
-    {
-        seqan::ArgParseOption outputOpt = seqan::ArgParseOption(
-            "o", "output", "Name of the output file.",
-            seqan::ArgParseOption::OUTPUT_FILE, "OUTPUT");
-        setValidValues(outputOpt, SeqFileOut::getFileExtensions());
-        addOption(parser, outputOpt);
-    }
-    else
-    {
-        seqan::ArgParseOption outputOpt = seqan::ArgParseOption(
-            "o", "output", "Prefix and file ending of output files (prefix$.fa - $: placeholder which will be determined by the program.).",
-            seqan::ArgParseOption::OUTPUT_PREFIX, "OUTPUT");
-        setValidValues(outputOpt, SeqFileOut::getFileExtensions());
-        addOption(parser, outputOpt);
-    }
-
-    if (flexiProgram == ALL_STEPS)
-    {
-        seqan::ArgParseOption adTagOpt = seqan::ArgParseOption(
-            "t", "tag", "Tags IDs of sequences which had adapters removed and/or were quality-trimmed.");
-        addOption(parser, adTagOpt);
-    }
-
-    seqan::ArgParseOption adInfoOpt = seqan::ArgParseOption(
-        "ni", "noInfo", "Don't print paramter overview to console.");
-    addOption(parser, adInfoOpt);
-}
-
-void ArgumentParserBuilder::addFilteringOptions(seqan::ArgumentParser & parser)
-{
-    // Preprocessing and Filtering
-    addSection(parser, "Preprocessing and Filtering");
-
-    seqan::ArgParseOption leftTrimOpt = seqan::ArgParseOption(
-        "tl", "trimLeft", "Number of Bases to be trimmed from the 5'end(s) before further processing.",
-        seqan::ArgParseArgument::INTEGER, "LENGTH");
-    setDefaultValue(leftTrimOpt, 0);
-    setMinValue(leftTrimOpt, "0");
-    addOption(parser, leftTrimOpt);
-
-	seqan::ArgParseOption tagTrimmingOpt = seqan::ArgParseOption(
-		"tt", "tagTrimming", "Write trimmed-out segments into id.");
-	addOption(parser, tagTrimmingOpt);
-
-    seqan::ArgParseOption rigthTrimOpt = seqan::ArgParseOption(
-        "tr", "trimRight", "Number of Bases to be trimmed from the 3'end(s) before further processing.",
-        seqan::ArgParseArgument::INTEGER, "LENGTH");
-    setDefaultValue(rigthTrimOpt, 0);
-    setMinValue(rigthTrimOpt, "0");
-    addOption(parser, rigthTrimOpt);
-
-    seqan::ArgParseOption minLenOpt = seqan::ArgParseOption(
-        "ml", "minLength", "Required minimal length of reads after all PREprocessing steps.",
-        seqan::ArgParseArgument::INTEGER, "LENGTH");
-    setDefaultValue(minLenOpt, 0);
-    setMinValue(minLenOpt, "0");
-    addOption(parser, minLenOpt);
-
-    seqan::ArgParseOption uncalledOpt = seqan::ArgParseOption(
-        "u", "uncalled", "Number of allowed uncalled bases per sequence.",
-        seqan::ArgParseOption::INTEGER, "VALUE");
-    setDefaultValue(uncalledOpt, 0);
-    setMinValue(uncalledOpt, "0");
-    addOption(parser, uncalledOpt);
-
-    seqan::ArgParseOption substituteOption = seqan::ArgParseOption(
-        "s", "substitute", "Substitue Dna-character for N's.",
-        seqan::ArgParseOption::STRING, "BASE");
-    setDefaultValue(substituteOption, "A");
-    setValidValues(substituteOption, "A C G T");
-    addOption(parser, substituteOption);
-
-     seqan::ArgParseOption finMinLenOpt = seqan::ArgParseOption(
-        "fm", "finalMinLength", "Deletes read (and mate)"
-        " if on of them is shorter than the given value after the complete worflow.",
-        seqan::ArgParseArgument::INTEGER, "LENGTH");
-    setMinValue(finMinLenOpt, "1");
-    addOption(parser, finMinLenOpt);
-
-    seqan::ArgParseOption finLenOpt = seqan::ArgParseOption(
-        "fl", "finalLength", "Trims reads to desired length after the complete workflow.",
-        seqan::ArgParseArgument::INTEGER, "LENGTH");
-    setDefaultValue(finLenOpt, 0);
-    setMinValue(finLenOpt, "1");
-    addOption(parser, finLenOpt);
-
-    addTextSection(parser, "EXAMPLE");
-    std::string appName;
-    assign(appName, getAppName(parser));
-    addText(parser, appName + " READS.fq -tr r -u 1 -o RESULT.fq");
-
-}
-
-void ArgumentParserBuilder::addDemultiplexingOptions(seqan::ArgumentParser & parser)
-{
-    // Barcode Demultiplexing
-    addSection(parser, "Demultiplexing Options");
-    
-    seqan::ArgParseOption barcodeFileOpt = seqan::ArgParseOption(
-        "b", "barcodes", "FastA file containing the used barcodes and their IDs. Necessary for demutiplexing.",
-        seqan::ArgParseArgument::INPUT_FILE, "BARCODE_FILE");
-    setValidValues(barcodeFileOpt, SeqFileIn::getFileExtensions());
-    addOption(parser, barcodeFileOpt);
-
-    seqan::ArgParseOption multiplexFileOpt = seqan::ArgParseOption(
-        "x", "multiplex", "FastA/FastQ file containing the barcode for each read.",
-        seqan::ArgParseArgument::INPUT_FILE, "MULTIPLEX_FILE");
-    setValidValues(multiplexFileOpt, SeqFileIn::getFileExtensions());
-    addOption(parser, multiplexFileOpt);
-    
-    addOption(parser, seqan::ArgParseOption(
-        "app", "approximate", "Select approximate barcode demultiplexing, allowing one mismatch."));
-
-    addOption(parser, seqan::ArgParseOption(
-        "hc", "hardClip", "Select hardClip option, clipping the first length(barcode) bases in any case."));
-
-    addOption(parser, seqan::ArgParseOption(
-        "ex", "exclude", "Exclude unidentified reads from further processing."));
-    
-    addTextSection(parser, "EXAMPLE");
-    std::string appName;
-    assign(appName, getAppName(parser));
-    addText(parser, appName + " READS.fq -b BARCODES.fa -o RESULT.fq");
-}
-
-void ArgumentParserBuilder::addAdapterTrimmingOptions(seqan::ArgumentParser & parser)
-{
-    // ADAPTER TRIMMING
-    addSection(parser, "Adapter removal options");
-    seqan::ArgParseOption adapterFileOpt = seqan::ArgParseOption(
-        "a", "adapters", "FastA file containing the two adapter sequences. "
-        "The adapters according to the layout: 5'-adapter1-read-adapter2-3'.",
-        seqan::ArgParseArgument::INPUT_FILE, "ADAPTER_FILE");
-    setValidValues(adapterFileOpt, SeqFileIn::getFileExtensions());
-    addOption(parser, adapterFileOpt);
-
-    seqan::ArgParseOption noAdapterOpt = seqan::ArgParseOption(
-        "pa", "paired-adapterTrimming", "Trim adapters from paired-end reads without using reference adapters.");
-    addOption(parser, noAdapterOpt);
-
-    seqan::ArgParseOption errorOpt = seqan::ArgParseOption(
-        "e", "errors", "Allowed errors in adapter detection.",
-        seqan::ArgParseOption::INTEGER, "VALUE");
-    addOption(parser, errorOpt);
-
-	seqan::ArgParseOption rateOpt = seqan::ArgParseOption(
-		"er", "error rate", "Allowed errors per overlap in adapter detection.",
-		seqan::ArgParseOption::DOUBLE, "VALUE");
-	setDefaultValue(rateOpt, 0.2);
-	addOption(parser, rateOpt);
-
-    seqan::ArgParseOption overlapOpt = seqan::ArgParseOption(
-        "ol", "overlap", "Minimum length of overlap for a significant adapter match.",
-        seqan::ArgParseOption::INTEGER, "VALUE");
-    setDefaultValue(overlapOpt, 4);
-    addOption(parser, overlapOpt);
-
-    seqan::ArgParseOption overhangOpt = seqan::ArgParseOption(
-        "oh", "overhang", "Number of bases that the adapter can stick over at the opposite end",
-        seqan::ArgParseOption::INTEGER, "VALUE");
-    setDefaultValue(overhangOpt, 0);
-    addOption(parser, overhangOpt);
-
-    seqan::ArgParseOption timesOpt = seqan::ArgParseOption(
-        "times", "times", "Do at maximum N iterations of adapter filtering. Every iteration the best matching adapter is removed.",
-        seqan::ArgParseOption::INTEGER, "VALUE");
-    setDefaultValue(timesOpt, 1);
-    addOption(parser, timesOpt);
-
-    if (flexiProgram != ALL_STEPS)
-    {
-        seqan::ArgParseOption adTagOpt = seqan::ArgParseOption(
-            "t", "tag", "Tags IDs of sequences which had adapters removed.");
-        addOption(parser, adTagOpt);
-    }
-
-    addTextSection(parser, "EXAMPLE");
-    std::string appName;
-    assign(appName, getAppName(parser));
-    addText(parser, appName + " READS.fq -a ADAPTER.fa -o RESULT.fq");
-
-}
-
-void ArgumentParserBuilder::addReadTrimmingOptions(seqan::ArgumentParser & parser)
-{
-    // READ TRIMMING
-    addSection(parser, "Quality trimming options");
-    seqan::ArgParseOption qualOpt = seqan::ArgParseOption(
-        "q", "quality", "Quality threshold for read trimming.",
-        seqan::ArgParseArgument::INTEGER, "PHRED");
-    setMinValue(qualOpt, "0");
-    setMaxValue(qualOpt, "40");
-    addOption(parser, qualOpt);
-
-    seqan::ArgParseOption lenOpt = seqan::ArgParseOption(
-        "l", "length", 
-        "Minimum read length after trimming. " 
-        "Shorter reads will be substituted by a single N or removed if the paired read is too short as well.",
-        seqan::ArgParseArgument::INTEGER, "LENGTH");
-    setDefaultValue(lenOpt, 1);
-    setMinValue(lenOpt, "1");
-    addOption(parser, lenOpt);
-
-    seqan::ArgParseOption trimOpt = seqan::ArgParseOption(
-        "m", "method", "Method for trimming reads.",
-        seqan::ArgParseArgument::STRING, "METHOD");
-    setDefaultValue(trimOpt, "WIN");
-    setValidValues(trimOpt, "WIN BWA TAIL");
-    addOption(parser, trimOpt);
-
-    if (flexiProgram != ALL_STEPS)
-    {
-        seqan::ArgParseOption adTagOpt = seqan::ArgParseOption(
-            "t", "tag", "Tags IDs of sequences which were quality-trimmed.");
-        addOption(parser, adTagOpt);
-    }
-
-    addTextSection(parser, "EXAMPLE");
-    std::string appName;
-    assign(appName, getAppName(parser));
-    addText(parser, appName + " READS.fq -q 20 -l 80 BARCODES -app -o RESULT.fq");
-}
-
-// --------------------------------------------------------------------------
-// Class FilteringParserBuilder
-// --------------------------------------------------------------------------
-
-class FilteringParserBuilder : public ArgumentParserBuilder
-{
-public:
-    seqan::ArgumentParser build();
-
-private:
-    void addHeader(seqan::ArgumentParser & parser);
-};
-
-void FilteringParserBuilder::addHeader(seqan::ArgumentParser & parser)
-{
-    setCategory(parser, "NGS Quality Control");
-    setShortDescription(parser, "The SeqAn Filtering Toolkit of Flexcat.");
-    addUsageLine(parser, " \\fI<READ_FILE1>\\fP \\fI<[READ_FILE2]>\\fP \\fI[OPTIONS]\\fP");
-    addDescription(parser,
-       "This program is a sub-routine of Flexcat (a new implementation and extension of"
-        " the original flexcat[1]) and can be used to filter reads and apply "
-       "sequence independent trimming options");
-
-    addDescription(parser, "[1] Dodt, M.; Roehr, J.T.; Ahmed, R.; Dieterich, "
-            "C.  FLEXBAR—Flexible Barcode and Adapter Processing for "
-            "Next-Generation Sequencing Platforms. Biology 2012, 1, 895-905.");
-
-    seqan::setVersion(parser, SEQAN_APP_VERSION " [" SEQAN_REVISION "]");
-    setDate(parser, SEQAN_DATE);
-
-    seqan::ArgParseArgument fileArg(seqan::ArgParseArgument::INPUT_FILE, "READS", true);
-    setValidValues(fileArg, SeqFileIn::getFileExtensions());
-    addArgument(parser, fileArg);
-    setHelpText(parser, 0, "Either one (single-end) or two (paired-end) read files.");
-}
-
-seqan::ArgumentParser FilteringParserBuilder::build()
-{
-    seqan::ArgumentParser parser("sflexFilter");
-
-    addHeader(parser);
-    addGeneralOptions(parser);
-    addFilteringOptions(parser);
-
-    return parser;
-}
-
-// --------------------------------------------------------------------------
-// Class AdapterRemovalParserBuilder
-// --------------------------------------------------------------------------
-
-class AdapterRemovalParserBuilder : public ArgumentParserBuilder
-{
-public:
-    seqan::ArgumentParser build();
-
-private:
-    void addHeader(seqan::ArgumentParser & parser);
-};
-
-void AdapterRemovalParserBuilder::addHeader(seqan::ArgumentParser & parser)
-{
-    setCategory(parser, "NGS Quality Control");
-    setShortDescription(parser, "The Adapter Removal Toolkit of Flexcat.");
-    addUsageLine(parser, " \\fI<READ_FILE1>\\fP \\fI<[READ_FILE2]>\\fP \\fI[OPTIONS]\\fP");
-    addDescription(parser,
-        "This program is a sub-routine of Flexcat (a new implementation and extension of"
-        " the original flexbar[1]) and removes adapter sequences from reads.");
-
-    addDescription(parser, "[1] Dodt, M.; Roehr, J.T.; Ahmed, R.; Dieterich, "
-            "C.  FLEXBAR—Flexible Barcode and Adapter Processing for "
-            "Next-Generation Sequencing Platforms. Biology 2012, 1, 895-905.");
-
-    seqan::setVersion(parser, SEQAN_APP_VERSION " [" SEQAN_REVISION "]");
-#ifdef SEQAN_DATE
-    seqan::setDate(parser, SEQAN_DATE);
-#endif
-
-    seqan::ArgParseArgument fileArg(seqan::ArgParseArgument::INPUT_FILE, "READS", true);
-    setValidValues(fileArg, SeqFileIn::getFileExtensions());
-    addArgument(parser, fileArg);
-    setHelpText(parser, 0, "Either one (single-end) or two (paired-end) read files.");
-}
-
-seqan::ArgumentParser AdapterRemovalParserBuilder::build()
-{
-    seqan::ArgumentParser parser("sflexAR");
-
-    addHeader(parser);
-    addGeneralOptions(parser);
-    addAdapterTrimmingOptions(parser);
-
-    return parser;
-}
-
-// --------------------------------------------------------------------------
-// Class DemultiplexingParserBuilder
-// --------------------------------------------------------------------------
-
-class DemultiplexingParserBuilder : public ArgumentParserBuilder
-{
-public:
-    seqan::ArgumentParser build();
-
-private:
-    void addHeader(seqan::ArgumentParser & parser);
-};
-
-void DemultiplexingParserBuilder::addHeader(seqan::ArgumentParser & parser)
-{
-    setCategory(parser, "NGS Quality Control");
-    setShortDescription(parser, "The SeqAn Demultiplexing Toolkit of Flexcat.");
-    addUsageLine(parser, " \\fI<READ_FILE1>\\fP \\fI<[READ_FILE2]>\\fP \\fI[OPTIONS]\\fP");
-    addDescription(parser,
-        "This program is a sub-routine of Flexcat (a new implementation and extension of"
-        " the original flexbar[1]) and can be used for demultiplexing of reads.");
-
-    addDescription(parser, "[1] Dodt, M.; Roehr, J.T.; Ahmed, R.; Dieterich, "
-            "C.  FLEXBAR—Flexible Barcode and Adapter Processing for "
-            "Next-Generation Sequencing Platforms. Biology 2012, 1, 895-905.");
-
-
-    seqan::setVersion(parser, SEQAN_APP_VERSION " [" SEQAN_REVISION "]");
-    setDate(parser, SEQAN_DATE);
-
-    seqan::ArgParseArgument fileArg(seqan::ArgParseArgument::INPUT_FILE, "READS", true);
-    setValidValues(fileArg, SeqFileIn::getFileExtensions());
-    addArgument(parser, fileArg);
-    setHelpText(parser, 0, "Either one (single-end) or two (paired-end) read files.");
-}
-
-seqan::ArgumentParser DemultiplexingParserBuilder::build()
-{
-    seqan::ArgumentParser parser("sflexDMulti");
-
-    addHeader(parser);
-    addGeneralOptions(parser);
-    addDemultiplexingOptions(parser);
-
-    return parser;
-}
-
-
-// --------------------------------------------------------------------------
-// Class QualityControlParserBuilder
-// --------------------------------------------------------------------------
-
-class QualityControlParserBuilder : public ArgumentParserBuilder
-{
-public:
-    seqan::ArgumentParser build();
-
-private:
-    void addHeader(seqan::ArgumentParser & parser);
-};
-
-void QualityControlParserBuilder::addHeader(seqan::ArgumentParser & parser)
-{
-    setCategory(parser, "NGS Quality Control");
-    setShortDescription(parser, "The SeqAn Quality Control Toolkit of Flexcat.");
-    addUsageLine(parser, " \\fI<READ_FILE1>\\fP \\fI<[READ_FILE2]>\\fP \\fI[OPTIONS]\\fP");
-    addDescription(parser,
-        "This program is a sub-routine of Flexcat (a new implementation and extension of"
-        " the original flexbar [1]) and can be used for quality controlling of reads.");
-
-    addDescription(parser, "[1] Dodt, M.; Roehr, J.T.; Ahmed, R.; Dieterich, "
-            "C.  FLEXBAR—Flexible Barcode and Adapter Processing for "
-            "Next-Generation Sequencing Platforms. Biology 2012, 1, 895-905.");
-
-    seqan::setVersion(parser, SEQAN_APP_VERSION " [" SEQAN_REVISION "]");
-    setDate(parser, SEQAN_DATE);
-
-    seqan::ArgParseArgument fileArg(seqan::ArgParseArgument::INPUT_FILE, "READS", true);
-    setValidValues(fileArg, SeqFileIn::getFileExtensions());
-    addArgument(parser, fileArg);
-    setHelpText(parser, 0, "Either one (single-end) or two (paired-end) read files.");
-}
-
-seqan::ArgumentParser QualityControlParserBuilder::build()
-{
-    seqan::ArgumentParser parser("sflexQC");
-
-    addHeader(parser);
-    addGeneralOptions(parser);
-    addReadTrimmingOptions(parser);
-
-    return parser;
-}
-
-// --------------------------------------------------------------------------
-// Class AllStepsParserBuilder
-// --------------------------------------------------------------------------
-
-class AllStepsParserBuilder : public ArgumentParserBuilder
-{
-public:
-    seqan::ArgumentParser build();
-
-private:
-    void addHeader(seqan::ArgumentParser & parser);
-};
-
-void AllStepsParserBuilder::addHeader(seqan::ArgumentParser & parser)
-{
-    setCategory(parser, "NGS Quality Control");
-    setShortDescription(parser, "The Flexcat NGS-Data Processing Toolkit");
-    addUsageLine(parser, " \\fI<READ_FILE1>\\fP \\fI<[READ_FILE2]>\\fP \\fI[OPTIONS]\\fP");
-    addDescription(parser,
-        "Flexcat is a toolkit for the processing of sequenced NGS reads. "
-        "It is a reimplementation and extension of the original Flexbar implementation of Dodt [1]. It is "
-        "possible to demultiplex the reads and order them according to "
-        "different kind of barcodes, to remove adapter contamination from "
-        "reads, to trim low quality bases, filter N's or trim whole reads. The "
-        "different tools are controlled through command line parameters and can "
-        "operate on both single- and paired-end read data.");
-
-    addDescription(parser, "[1] Dodt, M.; Roehr, J.T.; Ahmed, R.; Dieterich, "
-            "C.  FLEXBAR—Flexible Barcode and Adapter Processing for "
-            "Next-Generation Sequencing Platforms. Biology 2012, 1, 895-905.");
-
-    addDescription(parser, "(c) Copyright 2015 by Benjamin Menkuec.");
-
-    seqan::setVersion(parser, SEQAN_APP_VERSION " [" SEQAN_REVISION "]");
-    setDate(parser, SEQAN_DATE);
-
-    seqan::ArgParseArgument fileArg(seqan::ArgParseArgument::INPUT_FILE, "READS", true);
-    setValidValues(fileArg, SeqFileIn::getFileExtensions());
-    addArgument(parser, fileArg);
-    setHelpText(parser, 0, "Either one (single-end) or two (paired-end) read files.");
-}
-
-seqan::ArgumentParser AllStepsParserBuilder::build()
-{
-    seqan::ArgumentParser parser("Flexcat");
-
-    addHeader(parser);
-    addGeneralOptions(parser);
-    addFilteringOptions(parser);
-    addDemultiplexingOptions(parser);
-    addAdapterTrimmingOptions(parser);
-    addReadTrimmingOptions(parser);
-
-    return parser;
-}
-
-// --------------------------------------------------------------------------
-// Function initParser()
-// --------------------------------------------------------------------------
-
-//Defining the the argument parser
-seqan::ArgumentParser initParser()
-{
-    std::auto_ptr<ArgumentParserBuilder> argParseBuilder;
-
-    switch (flexiProgram)
-    {
-        case ADAPTER_REMOVAL:
-            argParseBuilder.reset(new AdapterRemovalParserBuilder());
-            break;
-        case DEMULTIPLEXING:
-            argParseBuilder.reset(new DemultiplexingParserBuilder());
-            break;
-        case FILTERING:
-            argParseBuilder.reset(new FilteringParserBuilder());
-            break;
-        case QUALITY_CONTROL:
-            argParseBuilder.reset(new QualityControlParserBuilder());
-            break;
-        case ALL_STEPS:
-            argParseBuilder.reset(new AllStepsParserBuilder());
-            break;
-        default:
-            SEQAN_FAIL("Invalid program type.");
-    }
-
-    return argParseBuilder->build();
-}
-
-// --------------------------------------------------------------------------
-// Class ProcessingParams
-// --------------------------------------------------------------------------
-
-struct ProcessingParams
-{
-    seqan::Dna substitute;
-    unsigned uncalled;
-    unsigned trimLeft;
-    unsigned trimRight;
-    unsigned minLen;
-    unsigned finalMinLength;
-    unsigned finalLength;
-    bool tagTrimming;
-    bool runPre;
-    bool runPost;
-    bool runSubstitute;
-    bool runCheckUncalled;
-
-    ProcessingParams() :
-        substitute('A'), 
-        uncalled(0),
-        trimLeft(0),
-        trimRight(0),
-        minLen(0),
-        finalMinLength(0),
-        finalLength(0),
-        tagTrimming(false),
-        runPre(false),
-        runPost(false), 
-        runSubstitute(false),
-        runCheckUncalled(false) {};
-};
-
-enum class TrimmingMode
-{
-    E_WINDOW,
-    E_BWA,
-    E_TAIL
-};
-
-struct AdapterTrimmingParams
-{
-    bool pairedNoAdapterFile;
-    bool run;
-    AdapterSet adapters;
-    AdapterMatchSettings mode;
-    bool tag;
-    AdapterTrimmingParams() : pairedNoAdapterFile(false), run(false), tag(false) {};
-};
-
-struct QualityTrimmingParams
-{
-    TrimmingMode trim_mode;
-    int cutoff;
-    int min_length;
-    bool run;
-    bool tag;
-       QualityTrimmingParams() : trim_mode(TrimmingMode::E_WINDOW), cutoff(-1), min_length(1), run(false), tag(false) {};
-};
-
-struct InputFileStreams
-{
-    seqan::SeqFileIn fileStream1, fileStream2, fileStreamMultiplex;
-};
-
-struct ProgramParams
-{
-    unsigned int fileCount;
-    bool showSpeed;
-    unsigned int firstReads;
-    unsigned records;
-    unsigned int num_threads;
-    bool ordered;
-
-    ProgramParams() : fileCount(0), showSpeed(false), firstReads(0), records(0), num_threads(0), ordered(false) {};
-};
 
 
 // ============================================================================
 // Functions
 // ============================================================================
 
-int loadBarcodes(char const * path, DemultiplexingParams& params)
-{
-    seqan::SeqFileIn bcFile;
-
-    if (!open(bcFile, path, OPEN_RDONLY))
-    {
-        std::cerr << "Error while opening file'" << params.barcodeFile << "'.\n";
-        return 1;
-    }
-
-    while (!atEnd(bcFile))
-    {
-        std::string id;
-        std::string barcode;
-        readRecord(id, barcode, bcFile);
-        params.barcodeIds.emplace_back(id);
-        params.barcodes.emplace_back(barcode);
-    }
-
-    if (params.approximate)                            //modifies the barcodes for approximate matching
-    {
-        buildAllVariations(params.barcodes);
-    }
-    return 0;
-}
 
 template<template <typename> class TRead, typename TSeq, typename = std::enable_if_t < std::is_same<TRead<TSeq>, Read<TSeq>>::value || std::is_same<TRead<TSeq>, ReadPairedEnd<TSeq>>::value>>
 inline void loadMultiplex(std::vector<TRead<TSeq>>& reads, unsigned records, seqan::SeqFileIn& multiplexFile)
@@ -757,210 +92,6 @@ inline void loadMultiplex(std::vector<TRead<TSeq>>& reads, unsigned records, seq
         readRecord(id, reads[i].demultiplex, multiplexFile);
         ++i;
     }
-}
-
-int openStream(seqan::CharString const & file, seqan::SeqFileIn & inFile)
-{
-    if (!open(inFile, seqan::toCString(file)))
-    {
-        std::cerr << "Error while opening input file '" << file << "'.\n";
-        return 1;
-    }
-    return 0;
-}
-
-int loadDemultiplexingParams(seqan::ArgumentParser const& parser, DemultiplexingParams& params)
-{
-    // APPROXIMATE/EXACT MATCHING---------------------    
-    params.approximate = seqan::isSet(parser, "app");
-    // HARD CLIP MODE --------------------------------
-    params.hardClip = seqan::isSet(parser, "hc") && !(isSet(parser, "ex"));
-    // EXCLUDE UNIDENTIFIED --------------------------
-    params.exclude = isSet(parser, "ex") && isSet(parser, "b");
-    // RUN -------------------------------------------
-    params.run = isSet(parser, "b");
-    if (isSet(parser, "x"))
-        params.runx = true;
-    else
-        params.runx = false;
-    // BARCODES --------------------------------------
-    if (isSet(parser, "b"))
-    {
-        getOptionValue(params.barcodeFile, parser, "b");
-        if (loadBarcodes(toCString(params.barcodeFile), params) != 0)
-            return 1;
-    }
-    return 0;
-}
-
-int loadAdapterTrimmingParams(seqan::ArgumentParser const& parser, AdapterTrimmingParams & params)
-{
-    // PAIRED-END ------------------------------
-    int fileCount =  getArgumentValueCount(parser, 0);
-    // Only consider paired-end mode if two files are given and user wants paired mode.
-    params.pairedNoAdapterFile = fileCount == 2 && isSet(parser, "pa");
-    // Set run flag, depending on essential parameters.
-    params.run = isSet(parser,"a") || (isSet(parser, "pa") && fileCount == 2);
-
-    // Settings for adapter trimming
-    int o;
-    int e;
-    double er;
-    int oh;
-    unsigned int times;
-    getOptionValue(o, parser, "overlap");
-    getOptionValue(e, parser, "e");
-    getOptionValue(er, parser, "er");
-    getOptionValue(oh, parser, "oh");
-    getOptionValue(times, parser, "times");
-    params.mode = AdapterMatchSettings(o, e, er, oh, times);
-
-    // ADAPTER SEQUENCES ----------------------------
-    std::string adapterFile, id;
-    // If adapter sequences are given, we read them in any case.
-    if (isSet(parser, "a"))
-    {
-        getOptionValue(adapterFile, parser, "a");
-        seqan::SeqFileIn adapterInFile;
-        if (!open(adapterInFile, toCString(adapterFile), OPEN_RDONLY))
-        {
-            std::cerr << "Error while opening file'" << adapterFile << "'.\n";
-            return 1;
-        }
-        TAdapterSequence tempAdapter;
-        AdapterItem adapterItem;
-        unsigned int adapterId = 0;
-        while (!atEnd(adapterInFile))
-        {
-            readRecord(id, adapterItem.seq, adapterInFile);
-            if (id.find("3'") != std::string::npos)
-                adapterItem.adapterEnd = AdapterItem::end3;
-            else if (id.find("5'") != std::string::npos)
-                adapterItem.adapterEnd = AdapterItem::end5;
-            else
-            {
-                std::cerr << "End for adapter \"" << id << "\" not specified, adapter will be ignored.\n";
-                continue;
-            }
-            adapterItem.anchored = id.find(":anchored:") != std::string::npos ? true : false;
-            adapterItem.reverse = id.find(":reverse:") != std::string::npos ? true : false;
-
-            adapterItem.overhang = oh;
-            adapterItem.id = adapterId++;
-            appendValue(params.adapters, adapterItem);
-        }
-    }
-    // If they are not given, but we would need them (single-end trimming), output error.
-    else if ((isSet(parser, "pa") && fileCount == 1))
-    {
-        std::cerr << "Unpaired adapter removal requires paired reads.\n";
-        return 1;
-    }
-    else if (isSet(parser, "pa"))
-    {
-        std::cerr << "You can not specify adapters for paired adapter removal.\n";
-        return 1;
-    }
-
-    return 0;
-}
-
-int loadQualityTrimmingParams(seqan::ArgumentParser const & parser, QualityTrimmingParams & params)
-{
-    // TRIMMING METHOD ----------------------------
-    std::string method;
-    getOptionValue(method, parser, "m");
-    if (method == "WIN")
-    {
-        params.trim_mode = TrimmingMode::E_WINDOW;
-    }
-    else if (method == "BWA")
-    {
-        params.trim_mode = TrimmingMode::E_BWA;
-    }
-    else
-    {
-        params.trim_mode = TrimmingMode::E_TAIL;
-    }
-    // QUALITY CUTOFF ----------------------------
-    if (isSet(parser, "q"))
-    {
-        getOptionValue(params.cutoff, parser, "q");
-    }
-    // MINIMUM SEQUENCE LENGTH -------------------
-    getOptionValue(params.min_length, parser, "l");
-    // Set run flag, depending on essential parameters (which are in a valid state at this point).
-    params.run = isSet(parser, "q");
-    return 0;
-}
-
-int loadProgramParams(seqan::ArgumentParser const & parser, ProgramParams& params, InputFileStreams& vars)
-{
-    params.fileCount = getArgumentValueCount(parser, 0);
-    // Load files.
-    seqan::CharString fileName1, fileName2;
-    getArgumentValue(fileName1, parser, 0, 0);
-    if (openStream(fileName1, vars.fileStream1) != 0)
-    {
-        return 1;
-    }
-    if (params.fileCount == 2)
-    {
-        getArgumentValue(fileName2, parser, 0, 1);
-        if (openStream(fileName2, vars.fileStream2) != 0)
-        {
-            return 1;
-        }
-        if (value(format(vars.fileStream1)) != value(format(vars.fileStream2)))
-        {
-            std::cerr << "Input files must have the same file format.\n";
-            return 1;
-        }
-    }
-    params.showSpeed = isSet(parser, "ss");
-
-    params.firstReads = std::numeric_limits<unsigned>::max();
-    if (seqan::isSet(parser, "fr"))
-        getOptionValue(params.firstReads, parser, "fr");
-
-    params.num_threads = 1;
-    getOptionValue(params.num_threads, parser, "tnum");
-    omp_set_num_threads(params.num_threads);
-
-    getOptionValue(params.records, parser, "r");
-    getOptionValue(params.ordered, parser, "od");
-    return 0;
-}
-
-int checkParams(ProgramParams const & programParams, InputFileStreams const& inputFileStreams, ProcessingParams const & processingParams,
-    DemultiplexingParams const & demultiplexingParams, AdapterTrimmingParams const & adapterTrimmingParams,
-    QualityTrimmingParams & qualityTrimmingParams)
-{
-    // Were there options that activated at least one processing stage?
-
-    if (!(adapterTrimmingParams.run || qualityTrimmingParams.run || demultiplexingParams.run || processingParams.runPre
-        || processingParams.runPost))
-    {
-        std::cerr << "\nNo processing stage was specified.\n";
-        return 1;
-    }
-    // If quality trimming was selected, check if file format includes qualities.
-    if (qualityTrimmingParams.run)
-    {
-        if ((value(format(inputFileStreams.fileStream1)) != Find<FileFormat<seqan::SeqFileIn>::Type, Fastq>::VALUE) ||
-            ((programParams.fileCount == 2) &&
-            (value(format(inputFileStreams.fileStream2)) != Find<FileFormat<seqan::SeqFileIn>::Type, Fastq>::VALUE)))
-        {
-            std::cerr << "\nQuality trimming requires quality information, please specify fq files." << std::endl;
-            return 1;
-        }
-    }
-    // If we don't demultiplex (and therefore take file names from the barcode IDs), set file names.
-    if (!demultiplexingParams.run)
-    {
-        //std::cout << basename(toCString(fileName1)) << "\n\n";
-    }
-    return 0;
 }
 
 // PROGRAM STAGES ---------------------
@@ -1223,56 +354,32 @@ unsigned int readReads(std::vector<TRead<TSeq>>& reads, const unsigned int recor
     return i;
 }
 
-
-// strange bug probably in visual studio, this is not working, but the lambda works
-template <typename TFinder>
-struct ReadTransformer
-{
-    ReadTransformer(const ProgramParams& programParams, const ProcessingParams& processingParams, const DemultiplexingParams& demultiplexingParams, const AdapterTrimmingParams& adapterTrimmingParams,
-        const QualityTrimmingParams& qualityTrimmingParams, TFinder &finder) : 
-        _programParams(programParams), _processingParams(processingParams), _demultiplexingParams(demultiplexingParams),
-        _adapterTrimmingParams(adapterTrimmingParams), _qualityTrimmingParams(qualityTrimmingParams), _finder(finder){};
-
-    template <typename TItem>
-    auto operator()(TItem&& reads)
-    {
-        GeneralStats generalStats(length(_demultiplexingParams.barcodeIds) + 1, _adapterTrimmingParams.adapters.size());
-        generalStats.readCount = reads.size();
-        preprocessingStage(_processingParams, reads, generalStats);
-        if (demultiplexingStage(_demultiplexingParams, reads, _finder, generalStats) != 0)
-            std::cerr << "DemultiplexingStage error" << std::endl;
-        adapterTrimmingStage(_adapterTrimmingParams, reads, generalStats);
-        qualityTrimmingStage(_qualityTrimmingParams, reads, generalStats);
-        postprocessingStage(_processingParams, reads, generalStats);
-
-        auto ret = std::make_unique<std::remove_reference_t<decltype(reads)>>(std::move(reads));
-        return std::make_unique<std::tuple<std::unique_ptr<std::remove_reference_t<decltype(reads)>>, decltype(_demultiplexingParams.barcodeIds), decltype(generalStats) >>(std::make_tuple(std::move(ret), _demultiplexingParams.barcodeIds, generalStats));
-    }
-private:
-    const ProgramParams& _programParams;
-    const ProcessingParams& _processingParams;
-    const DemultiplexingParams& _demultiplexingParams;
-    const AdapterTrimmingParams& _adapterTrimmingParams;
-    const QualityTrimmingParams& _qualityTrimmingParams;
-    const TFinder& _finder;
-};
-
 // END FUNCTION DEFINITIONS ---------------------------------------------
 template<template <typename> class TRead, typename TSeq, typename TEsaFinder, typename TStats>
 int mainLoop(TRead<TSeq>, const ProgramParams& programParams, InputFileStreams& inputFileStreams, const DemultiplexingParams& demultiplexingParams, const ProcessingParams& processingParams, const AdapterTrimmingParams& adapterTrimmingParams,
     const QualityTrimmingParams& qualityTrimmingParams, TEsaFinder& esaFinder,
     OutputStreams& outputStreams, TStats& stats)
 {
-    using TReadReader = ReadReader<TRead, TSeq, ProgramParams, InputFileStreams>;
-    TReadReader readReader(inputFileStreams, programParams);
-
-    using TTransformer = ReadTransformer<TEsaFinder>;
-    TTransformer transformer(programParams, processingParams, demultiplexingParams, adapterTrimmingParams, qualityTrimmingParams, esaFinder);
-
     using TReadWriter = ReadWriter<OutputStreams, ProgramParams>;
     TReadWriter readWriter(outputStreams, programParams);
 
-    auto transformer2 = [&](auto reads){
+    unsigned int numReads = 0;
+    auto readReader = [&numReads, &programParams, &inputFileStreams]() {
+        auto item = std::make_unique<std::vector<TRead<TSeq>>>();
+        if (numReads > programParams.firstReads)    // maximum read number reached -> dont do further reads
+        {
+            item.release();   // return empty unique_ptr to signal end
+            return std::move(item);
+        }
+        readReads(*item, programParams.records, inputFileStreams);
+        loadMultiplex(*item, programParams.records, inputFileStreams.fileStreamMultiplex);
+        numReads += item->size();
+        if (item->empty())    // no more reads available
+            item.release();   // return empty unique_ptr to signal eof
+        return std::move(item);
+    };
+
+    auto transformer = [&](auto reads){
         GeneralStats generalStats(length(demultiplexingParams.barcodeIds) + 1, adapterTrimmingParams.adapters.size());
         generalStats.readCount = reads->size();
         preprocessingStage(processingParams, *reads, generalStats);
@@ -1290,24 +397,18 @@ int mainLoop(TRead<TSeq>, const ProgramParams& programParams, InputFileStreams& 
     {
         if (programParams.ordered)
         {
-            auto ptc_unit = ptc::ordered_ptc(readReader, transformer2, readWriter, programParams.num_threads);
+            auto ptc_unit = ptc::ordered_ptc(readReader, transformer, readWriter, programParams.num_threads);
             ptc_unit->start();
             auto f = ptc_unit->get_future();
             stats = f.get();
         }
         else
         {
-            auto ptc_unit = ptc::unordered_ptc(readReader, transformer2, readWriter, programParams.num_threads);
+            auto ptc_unit = ptc::unordered_ptc(readReader, transformer, readWriter, programParams.num_threads);
             ptc_unit->start();
             auto f = ptc_unit->get_future();
             stats = f.get();
         }
-        //while (!ptc_unit.finished()) // shortcut is used most of the time -> xxx.idle() get called only after eof is set
-        //{
-        //    std::this_thread::sleep_for(std::chrono::milliseconds(100));
-        //}
-        //ptc_unit->wait();
-        //readWriter.getStats(stats);
     }
     else
     {
@@ -1322,7 +423,7 @@ int mainLoop(TRead<TSeq>, const ProgramParams& programParams, InputFileStreams& 
             if (numReadsRead == 0)
                 break;
 
-            auto res = transformer(std::move(*readSet));
+            auto res = transformer(std::move(readSet));
             generalStats += std::get<2>(*res);
 
             t1 = std::chrono::steady_clock::now();
@@ -1346,10 +447,10 @@ int mainLoop(TRead<TSeq>, const ProgramParams& programParams, InputFileStreams& 
 // ----------------------------------------------------------------------------
 // Program entry point.
 
-int flexcatMain(int argc, char const ** argv)
+int flexcatMain(const FlexiProgram flexiProgram, int argc, char const ** argv)
 {
     SEQAN_PROTIMESTART(loopTime);
-    seqan::ArgumentParser parser = initParser();
+    seqan::ArgumentParser parser = initParser(flexiProgram);
 
     // Additional checks
     seqan::ArgumentParser::ParseResult res = seqan::parse(parser, argc, argv);
@@ -1377,7 +478,7 @@ int flexcatMain(int argc, char const ** argv)
     //--------------------------------------------------
     ProcessingParams processingParams;
 
-    if(flexiProgram == FILTERING || flexiProgram == ALL_STEPS)
+    if(flexiProgram == FlexiProgram::FILTERING || flexiProgram == FlexiProgram::ALL_STEPS)
     {
         seqan::CharString substituteString;
         getOptionValue(substituteString, parser, "s");
@@ -1406,7 +507,7 @@ int flexcatMain(int argc, char const ** argv)
         processingParams.runPre = ((processingParams.minLen + processingParams.trimLeft + processingParams.trimRight != 0)
             || isSet(parser, "u"));
         processingParams.runPost = (processingParams.finalLength + processingParams.finalMinLength != 0);
-        if(flexiProgram == FILTERING)
+        if(flexiProgram == FlexiProgram::FILTERING)
         {
             processingParams.runPre = true;
             processingParams.runPost = true;
@@ -1420,7 +521,7 @@ int flexcatMain(int argc, char const ** argv)
     DemultiplexingParams demultiplexingParams;
     seqan::SeqFileIn multiplexInFile;    //Initialising the SequenceStream for the multiplex file
 
-    if(flexiProgram == DEMULTIPLEXING || flexiProgram == ALL_STEPS)
+    if(flexiProgram == FlexiProgram::DEMULTIPLEXING || flexiProgram == FlexiProgram::ALL_STEPS)
     {
         getOptionValue(demultiplexingParams.multiplexFile, parser, "x");
         if (isSet(parser, "x"))
@@ -1435,7 +536,7 @@ int flexcatMain(int argc, char const ** argv)
         if (loadDemultiplexingParams(parser, demultiplexingParams) != 0)
             return 1;
 
-        if(flexiProgram == DEMULTIPLEXING)
+        if(flexiProgram == FlexiProgram::DEMULTIPLEXING)
             demultiplexingParams.run = true;
     }
 
@@ -1445,7 +546,7 @@ int flexcatMain(int argc, char const ** argv)
 
     BarcodeMatcher esaFinder(demultiplexingParams.barcodes);
 
-    if(flexiProgram == DEMULTIPLEXING && (!isSet(parser, "x") && !isSet(parser, "b")))
+    if(flexiProgram == FlexiProgram::DEMULTIPLEXING && (!isSet(parser, "x") && !isSet(parser, "b")))
     {
         std::cerr << "No Barcodefile was provided." << std::endl;
         return 1;
@@ -1456,12 +557,12 @@ int flexcatMain(int argc, char const ** argv)
     //--------------------------------------------------
 
     QualityTrimmingParams qualityTrimmingParams;
-    if(flexiProgram == QUALITY_CONTROL || flexiProgram == ALL_STEPS)
+    if(flexiProgram == FlexiProgram::QUALITY_CONTROL || flexiProgram == FlexiProgram::ALL_STEPS)
     {
         if ( loadQualityTrimmingParams(parser, qualityTrimmingParams) != 0 )
             return 1;
 
-        if(flexiProgram == QUALITY_CONTROL)
+        if(flexiProgram == FlexiProgram::QUALITY_CONTROL)
             qualityTrimmingParams.run = true;
     }
 
@@ -1471,9 +572,9 @@ int flexcatMain(int argc, char const ** argv)
 
     AdapterTrimmingParams adapterTrimmingParams;
 
-    if(flexiProgram == ADAPTER_REMOVAL || flexiProgram == QUALITY_CONTROL|| flexiProgram == ALL_STEPS)
+    if(flexiProgram == FlexiProgram::ADAPTER_REMOVAL || flexiProgram == FlexiProgram::QUALITY_CONTROL|| flexiProgram == FlexiProgram::ALL_STEPS)
     {
-        if(flexiProgram == ADAPTER_REMOVAL || flexiProgram == ALL_STEPS)
+        if(flexiProgram == FlexiProgram::ADAPTER_REMOVAL || flexiProgram == FlexiProgram::ALL_STEPS)
         {
             if (loadAdapterTrimmingParams(parser, adapterTrimmingParams) != 0)
             {
@@ -1487,7 +588,7 @@ int flexcatMain(int argc, char const ** argv)
                 return 1;
         }
         adapterTrimmingParams.tag = qualityTrimmingParams.tag = tagOpt;
-        if(flexiProgram == ADAPTER_REMOVAL)
+        if(flexiProgram == FlexiProgram::ADAPTER_REMOVAL)
             adapterTrimmingParams.run = true;
     }
 
@@ -1586,7 +687,7 @@ int flexcatMain(int argc, char const ** argv)
             std::cout << "\tOrder policy: ordered" << std::endl;
         else
             std::cout << "\tOrder policy: unordered" << std::endl;
-        if(flexiProgram == ADAPTER_REMOVAL || flexiProgram == QUALITY_CONTROL|| flexiProgram == ALL_STEPS)
+        if(flexiProgram == FlexiProgram::ADAPTER_REMOVAL || flexiProgram == FlexiProgram::QUALITY_CONTROL|| flexiProgram == FlexiProgram::ALL_STEPS)
         {
             if (isSet(parser, "t"))
             {
@@ -1599,7 +700,7 @@ int flexcatMain(int argc, char const ** argv)
             std::cout << "\n";
         }
     
-        if(flexiProgram == FILTERING || flexiProgram == ALL_STEPS)
+        if(flexiProgram == FlexiProgram::FILTERING || flexiProgram == FlexiProgram::ALL_STEPS)
         {
             std::cout << "Pre-, Postprocessing and Filtering:\n";
             std::cout << "\tPre-trim 5'-end length: " << processingParams.trimLeft << "\n";
