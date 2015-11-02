@@ -51,19 +51,18 @@ add_definitions (-DSEQAN_REVISION="${SEQAN_REVISION}")
 add_definitions (-DSEQAN_DATE="${SEQAN_DATE}")
 
 # Update the list of file names below if you add source files to your application.
-add_executable(test_sflex_demultiplex        test_demultiplex.cpp demultiplex.h)
-add_executable(test_sflex_trimming           test_trimming.cpp read_trimming.h)
-add_executable(test_sflex_adapter            test_adapter.cpp adapter_trimming.h)
-add_executable(test_sflex_general_processing test_general_processing.cpp general_processing.h)
+add_executable(test_demultiplex        test_demultiplex.cpp demultiplex.h)
+add_executable(test_trimming           test_trimming.cpp read_trimming.h)
+add_executable(test_adapter            test_adapter.cpp adapter_trimming.h)
+add_executable(test_general_processing test_general_processing.cpp general_processing.h)
 
 foreach (TEST demultiplex trimming adapter general_processing)
-    target_link_libraries (test_sflex_${TEST} ${SEQAN_LIBRARIES})
+    target_link_libraries (test_${TEST} ${SEQAN_LIBRARIES})
 endforeach ()
 
 add_library (flexlib
 			 flexlib.cpp
 			 flexlib.h
-			 flexcat.h
 			 flexi_program.h
 			 ptc.h
              read.h
@@ -79,17 +78,17 @@ add_library (flexlib
              )
 target_link_libraries (flexlib ${SEQAN_LIBRARIES})
 
-set (KNIME_FLEX_NODES sflexQC sflexAR sflexDMulti sflexFilter)
+set (KNIME_FLEX_NODES flexcatQC flexcatAR flexcatDMulti flexcatFilter)
 
 foreach (TARGET ${KNIME_FLEX_NODES} flexcat)
-    add_executable (${TARGET} flexcat.cpp)
+    add_executable (${TARGET} flexcat.cpp flexcat.h)
     target_link_libraries (${TARGET} flexlib ${SEQAN_LIBRARIES})
 endforeach ()
 
-set_target_properties (sflexQC PROPERTIES COMPILE_DEFINITIONS "FLEX_PROG=FlexiProgram::QUALITY_CONTROL")
-set_target_properties (sflexAR PROPERTIES COMPILE_DEFINITIONS "FLEX_PROG=FlexiProgram::ADAPTER_REMOVAL")
-set_target_properties (sflexDMulti PROPERTIES COMPILE_DEFINITIONS "FLEX_PROG=FlexiProgram::DEMULTIPLEXING")
-set_target_properties (sflexFilter PROPERTIES COMPILE_DEFINITIONS "FLEX_PROG=FlexiProgram::FILTERING")
+set_target_properties (flexcatQC PROPERTIES COMPILE_DEFINITIONS "FLEX_PROG=FlexiProgram::QUALITY_CONTROL")
+set_target_properties (flexcatAR PROPERTIES COMPILE_DEFINITIONS "FLEX_PROG=FlexiProgram::ADAPTER_REMOVAL")
+set_target_properties (flexcatDMulti PROPERTIES COMPILE_DEFINITIONS "FLEX_PROG=FlexiProgram::DEMULTIPLEXING")
+set_target_properties (flexcatFilter PROPERTIES COMPILE_DEFINITIONS "FLEX_PROG=FlexiProgram::FILTERING")
 
 # Set CXX flags 
 if (NOT MSVC)

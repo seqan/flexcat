@@ -61,7 +61,7 @@ protected:
 class FilteringParserBuilder : public ArgumentParserBuilder
 {
 public:
-    seqan::ArgumentParser build()
+    seqan::ArgumentParser build() override
     {
         seqan::ArgumentParser parser("sflexFilter");
         addHeader(parser);
@@ -76,7 +76,7 @@ private:
 class AdapterRemovalParserBuilder : public ArgumentParserBuilder
 {
 public:
-    seqan::ArgumentParser build()
+    seqan::ArgumentParser build() override
     {
         seqan::ArgumentParser parser("sflexAR");
         addHeader(parser);
@@ -92,7 +92,7 @@ private:
 class DemultiplexingParserBuilder : public ArgumentParserBuilder
 {
 public:
-    seqan::ArgumentParser build() 
+    seqan::ArgumentParser build() override
     {
         seqan::ArgumentParser parser("sflexDMulti");
         addHeader(parser);
@@ -108,7 +108,7 @@ private:
 class QualityControlParserBuilder : public ArgumentParserBuilder
 {
 public:
-    seqan::ArgumentParser build()
+    seqan::ArgumentParser build() override
     {
         seqan::ArgumentParser parser("sflexQC");
         addHeader(parser);
@@ -124,7 +124,17 @@ private:
 class AllStepsParserBuilder : public ArgumentParserBuilder
 {
 public:
-    seqan::ArgumentParser build();
+    seqan::ArgumentParser build() override
+    {
+        seqan::ArgumentParser parser("Flexcat");
+        addHeader(parser);
+        addGeneralOptions(parser, FlexiProgram::ALL_STEPS);
+        addFilteringOptions(parser);
+        addDemultiplexingOptions(parser);
+        addAdapterTrimmingOptions(parser, FlexiProgram::ALL_STEPS);
+        addReadTrimmingOptions(parser, FlexiProgram::ALL_STEPS);
+        return parser;
+    }
 
 private:
     void addHeader(seqan::ArgumentParser & parser);
@@ -555,20 +565,6 @@ void AllStepsParserBuilder::addHeader(seqan::ArgumentParser & parser)
     setValidValues(fileArg, seqan::SeqFileIn::getFileExtensions());
     addArgument(parser, fileArg);
     setHelpText(parser, 0, "Either one (single-end) or two (paired-end) read files.");
-}
-
-seqan::ArgumentParser AllStepsParserBuilder::build()
-{
-    seqan::ArgumentParser parser("Flexcat");
-
-    addHeader(parser);
-    addGeneralOptions(parser, FlexiProgram::ALL_STEPS);
-    addFilteringOptions(parser);
-    addDemultiplexingOptions(parser);
-    addAdapterTrimmingOptions(parser, FlexiProgram::ALL_STEPS);
-    addReadTrimmingOptions(parser, FlexiProgram::ALL_STEPS);
-
-    return parser;
 }
 
 // --------------------------------------------------------------------------

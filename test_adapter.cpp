@@ -274,20 +274,20 @@ SEQAN_DEFINE_TEST(align_adapter_test)
 
 	TSeq seq = TSeq("AAAAAAAAAATTTTT");
 	TAda ada = TAda("TTTTTTTTTTT");
-	std::pair<unsigned, seqan::Align<TSeq> > pair;
-    alignPair(pair, seq, ada, seqan::AlignConfig<true, true, true, true>());
+	std::pair<int, seqan::Align<TSeq> > pair;
+    alignPair(pair, seq, ada, AlignAlgorithm::NeedlemanWunsch());
 	SEQAN_ASSERT_EQ(pair.first, 5u);
 
 	seq = TSeq("AAAAAAAAAATATATTA");
 	//                    |||||		   
 	ada = TAda(       "GGTTATATATTT"); // front and back gaps are allowed
-    alignPair(pair, seq, ada, seqan::AlignConfig<true, true, true, true>());
+    alignPair(pair, seq, ada, AlignAlgorithm::NeedlemanWunsch());
 	SEQAN_ASSERT_EQ(pair.first, 2u);
 
 	seq = TSeq("AAAAAAAAAATATATTA");
 	//                || |||||||		   
 	ada = TAda(     "GAATATATATTT"); // front and back gaps are allowed
-    alignPair(pair, seq, ada, seqan::AlignConfig<true, true, true, true>());
+    alignPair(pair, seq, ada, AlignAlgorithm::NeedlemanWunsch());
 	SEQAN_ASSERT_EQ(pair.first, 6u);
 
     unsigned int rightOverhang = 4;
@@ -295,21 +295,21 @@ SEQAN_DEFINE_TEST(align_adapter_test)
     seq = TSeq("CATCATAAAAAATATATTA");
     //          ||||||		   
     ada = TAda("CATCAT"); 
-    alignPair(pair, seq, ada, seqan::AlignConfig<true, true, true, true>(), leftOverhang, rightOverhang);
+    alignPair(pair, seq, ada, leftOverhang, rightOverhang, AlignAlgorithm::NeedlemanWunsch());
     SEQAN_ASSERT_EQ(pair.first, 6u);
 
     // just enough overlap
     seq = TSeq(    "CATCATAAAAAATATATTA");
     //              ||||		   
     ada = TAda("GGGGCATC"); 
-    alignPair(pair, seq, ada, seqan::AlignConfig<true, true, true, true>(), leftOverhang, rightOverhang);
+    alignPair(pair, seq, ada, leftOverhang, rightOverhang, AlignAlgorithm::NeedlemanWunsch());
     SEQAN_ASSERT_EQ(pair.first, 4u);
 
     // not enough overlap, should report score 0
     seq = TSeq(     "CATCATAAAAAATATATTA");
     //               |||		   
     ada = TAda("GGGGGCAT");
-    alignPair(pair, seq, ada, seqan::AlignConfig<true, true, true, true>(), leftOverhang, rightOverhang);
+    alignPair(pair, seq, ada, leftOverhang, rightOverhang, AlignAlgorithm::NeedlemanWunsch());
     SEQAN_ASSERT_EQ(pair.first, 0u);
 }
 

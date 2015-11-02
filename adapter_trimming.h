@@ -33,8 +33,7 @@
 // Author: Sebastian Roskosch <serosko@zedat.fu-berlin.de>
 // ==========================================================================
 
-#ifndef ADAPTERTRIMMING_H
-#define ADAPTERTRIMMING_H
+#pragma once
 
 #include <seqan/align.h>
 #include "helper_functions.h"
@@ -169,9 +168,9 @@ template <typename TAlign>
 unsigned getOverlap(TAlign& align) noexcept
 {
 	typedef typename seqan::Row<TAlign>::Type TRow;
-	TRow &row1 = seqan::row(align,0);
-	TRow &row2 = seqan::row(align,1);
-	return length(source(row1)) - countTotalGaps(row2);
+	const TRow &row1 = seqan::row(align,0);
+	const TRow &row2 = seqan::row(align,1);
+	return length(source(row1))- countTotalGaps(row2);
 }
 
 template <typename TAlign>
@@ -191,10 +190,15 @@ unsigned getInsertSize(TAlign& align) noexcept
 	return seq1_length + seq2_length - overlap - (seq2l + seq1r);
 }
 
+namespace AlignAlgorithm
+{
+    struct NeedlemanWunsch {};
+    struct Menkuec {};
+}
 
-template <typename TSeq, typename TAdapter, bool TTop, bool TLeft, bool TRight, bool TBottom>
-void alignPair(std::pair<unsigned, seqan::Align<TSeq> >& ret, const TSeq& seq1, const TAdapter& seq2,
-    const seqan::AlignConfig<TTop, TLeft, TRight, TBottom>& config, const int leftOverhang, const int rightOverhang) noexcept
+template <typename TSeq, typename TAdapter>
+void alignPair(std::pair<int, seqan::Align<TSeq> >& ret, const TSeq& seq1, const TAdapter& seq2, 
+    const int leftOverhang, const int rightOverhang, const AlignAlgorithm::NeedlemanWunsch&) noexcept
 {
     seqan::resize(rows(ret.second), 2);
     seqan::assignSource(row(ret.second, 0), seq1);
@@ -204,23 +208,89 @@ void alignPair(std::pair<unsigned, seqan::Align<TSeq> >& ret, const TSeq& seq1, 
     const TScore adapterScore(-100);
 
     // banded alignment
-    const int val1 = -leftOverhang;
-    const int val2 = length(seq1) - length(seq2) + rightOverhang;
-    /*
-    sequence is too short, return -1
-    */
-    if (val2 < val1)
+    const int shiftStartPos = -leftOverhang;
+    const int shiftEndPos = length(seq1) - length(seq2) + rightOverhang;
+    if (shiftEndPos < shiftStartPos)
     {
         ret.first = -1;
         return;
     }
-    ret.first = globalAlignment(ret.second, adapterScore, config, val1, val2, seqan::LinearGaps());
+    // allow gaps on all corners, because we use banded alignment to constraint the search space
+    seqan::AlignConfig<true, true, true, true> config; 
+    ret.first = globalAlignment(ret.second, adapterScore, config, shiftStartPos, shiftEndPos, seqan::LinearGaps());
+}
+
+/*
+- shifts adapterTemplate against sequence
+- calculate score for each shift position
+  - +1 for same base, -1 for mismatch, +0 for N
+- return score of the shift position, where the errorRate was minimal
+*/
+template <typename TSeq, typename TAdapter>
+void alignPair(std::pair<int, seqan::Align<TSeq> >& ret, const TSeq& seq1, const TAdapter& seq2, 
+        const int leftOverhang, const int rightOverhang, const AlignAlgorithm::Menkuec&) noexcept
+{
+    seqan::resize(rows(ret.second), 2);
+    seqan::assignSource(row(ret.second, 0), seq1);
+    seqan::assignSource(row(ret.second, 1), seq2);
+
+    const int shiftStartPos = -leftOverhang;
+    const int shiftEndPos = length(seq1) - length(seq2) + rightOverhang;
+    const auto lenSeq1 = length(seq1);
+    const auto lenSeq2 = length(seq2);
+    int shiftPos = shiftStartPos;
+    int bestShiftPos = shiftStartPos;
+    int bestScore = std::numeric_limits<int>::min();
+    float bestErrorRate = std::numeric_limits<float>::max();
+    unsigned int bestOverlap = 0;
+
+    if (shiftEndPos < shiftStartPos)
+    {
+        ret.first = bestScore; // invalid constraints
+        return;
+    }
+    while (shiftPos <= shiftEndPos)
+    {
+        const unsigned int overlapNegativeShift = std::min(shiftPos + lenSeq2, lenSeq1);
+        const unsigned int overlapPositiveShift = std::min(lenSeq1 - shiftPos, lenSeq2);
+        const unsigned int overlap = std::min(overlapNegativeShift, overlapPositiveShift);
+        const unsigned int overlapStart = std::max(shiftPos, 0);
+        int score = 0;
+        for (unsigned int pos = 0; pos < overlap; ++pos)
+        {
+            if (seq2[pos + std::min(0,shiftPos)*(-1)] == seq1[overlapStart + pos])
+                ++score;
+            else if (seq1[overlapStart + pos] != 'N')
+                --score;
+        }
+        const float errorRate = static_cast<float>((overlap-score)/2) / static_cast<float>(overlap);
+        if (errorRate < bestErrorRate || (errorRate == bestErrorRate && overlap > bestOverlap))
+        {
+            bestShiftPos = shiftPos;
+            bestScore = score;
+            bestErrorRate = errorRate;
+            bestOverlap = overlap;
+        }
+        ++shiftPos;
+    }
+    if (bestShiftPos < 0)
+    {
+        seqan::insertGaps(row(ret.second, 0), 0, - bestShiftPos); // top left
+        seqan::insertGaps(row(ret.second, 0), lenSeq1 - bestShiftPos, std::max<int>(0, lenSeq2 - lenSeq1 + bestShiftPos)); // top right
+        seqan::insertGaps(row(ret.second, 1), lenSeq2, std::max<int>(0,lenSeq1 - lenSeq2 - bestShiftPos)); // bottom right
+    }
+    else
+    {
+        seqan::insertGaps(row(ret.second, 0), lenSeq1, std::max<int>(0, lenSeq2 - lenSeq1 + bestShiftPos)); // top right
+        seqan::insertGaps(row(ret.second, 1), 0, bestShiftPos); // bottom left
+        seqan::insertGaps(row(ret.second, 1), lenSeq2+bestShiftPos, std::max<int>(0,lenSeq1 - lenSeq2 - bestShiftPos)); // bottom right
+    }
+    ret.first = bestScore;
 }
 
 // used only for testing and paired end data
-template <typename TSeq, typename TAdapter, bool TTop, bool TLeft, bool TRight, bool TBottom>
-void alignPair(std::pair<unsigned, seqan::Align<TSeq> >& ret, const TSeq& seq1, const TAdapter& seq2,
-		const seqan::AlignConfig<TTop, TLeft, TRight, TBottom>& config) noexcept
+template <typename TSeq, typename TAdapter>
+void alignPair(std::pair<int, seqan::Align<TSeq> >& ret, const TSeq& seq1, const TAdapter& seq2, const AlignAlgorithm::NeedlemanWunsch&) noexcept
 {
     seqan::resize(rows(ret.second), 2);
     seqan::assignSource(row(ret.second, 0), seq1);
@@ -230,7 +300,8 @@ void alignPair(std::pair<unsigned, seqan::Align<TSeq> >& ret, const TSeq& seq1, 
     const TScore adapterScore(-100);
 
 	// global alignment, not banded
-    ret.first = globalAlignment(ret.second, adapterScore, config, seqan::LinearGaps());
+    seqan::AlignConfig<true, true, true, true> config;
+    ret.first = globalAlignment(ret.second, adapterScore, config, seqan::NeedlemanWunsch());
 }
 
 template <typename TSeq>
@@ -242,8 +313,8 @@ unsigned stripPair(TSeq& seq1, TSeq& seq2) noexcept
     using TReverseComplement = typename STRING_REVERSE_COMPLEMENT<TAlphabet>::Type;
     TReverseComplement mod(seq2);
     typedef seqan::Align<TSeq> TAlign;
-    std::pair<unsigned, TAlign> ret;
-    alignPair(ret, seq1, mod, seqan::AlignConfig<true, true, true, true>());
+    std::pair<int, TAlign> ret;
+    alignPair(ret, seq1, mod, AlignAlgorithm::NeedlemanWunsch());
     const auto& score = ret.first;
     const TAlign& align = ret.second;
     // Use the overlap of the two sequences to determine the end position.
@@ -303,7 +374,7 @@ unsigned stripAdapter(TSeq& seq, AdapterTrimmingStats& stats, TAdapters const& a
     const TStripAdapterDirection&)
 {
     using TAlign = seqan::Align<TSeq>;
-    using TRow = typename seqan::Row<TAlign>::Type;
+    AlignAlgorithm::Menkuec alignAlgorithm;
 
     unsigned removed{ 0 };
     std::vector<std::tuple<unsigned int, unsigned int, TAlign, AdapterItem>> matches;
@@ -312,7 +383,7 @@ unsigned stripAdapter(TSeq& seq, AdapterTrimmingStats& stats, TAdapters const& a
     {
         matches.clear();
         {
-            std::pair<unsigned, TAlign> ret;
+            std::pair<int, TAlign> ret;
             for (auto const& adapterItem : adapters)
             {
                 //std::cout << "seq: " << seq << std::endl;
@@ -325,36 +396,29 @@ unsigned stripAdapter(TSeq& seq, AdapterTrimmingStats& stats, TAdapters const& a
                     continue;
 
                 const auto& adapterSequence = adapterItem.seq;
+                const unsigned int oppositeEndOverhang = adapterItem.anchored == true ? length(adapterSequence) - length(seq) : adapterItem.overhang;
+                const unsigned int sameEndOverhang = adapterItem.anchored == true ? 0 : length(adapterItem.seq) - spec.min_length;
                 if (adapterItem.adapterEnd == AdapterItem::end3)
-                    if(!adapterItem.anchored)
-                        alignPair(ret, seq, adapterSequence, seqan::AlignConfig<true, true, true, true>(), adapterItem.overhang, length(adapterItem.seq) - spec.min_length);
-                    else
-                        alignPair(ret, seq, adapterSequence, seqan::AlignConfig<true, true, true, true>(), length(adapterSequence)-length(seq), 0);
+                    alignPair(ret, seq, adapterSequence, oppositeEndOverhang, sameEndOverhang, alignAlgorithm);
                 else
-                    if (!adapterItem.anchored)
-                        alignPair(ret, seq, adapterSequence, seqan::AlignConfig<true, true, true, true>(), length(adapterItem.seq) - spec.min_length, adapterItem.overhang);
-                    else
-                        alignPair(ret, seq, adapterSequence, seqan::AlignConfig<true, true, true, true>(), 0, length(adapterSequence) - length(seq));
+                    alignPair(ret, seq, adapterSequence, sameEndOverhang, oppositeEndOverhang, alignAlgorithm);
 
                 const int score = ret.first;
                 if (score < 0)
                     continue;
                 const unsigned int overlap = getOverlap(ret.second);
                 const int mismatches = (overlap - score) / 2;
-                //std::cout << "score: " << ret.first << " overlap: " << overlap << " mismatches: " << mismatches << std::endl;
+                //std::cout << "score: " << ret.first << " er: " << (float)mismatches/overlap << " overlap: " << overlap << " mismatches: " << mismatches << std::endl;
                 //std::cout << ret.second << std::endl;
 
                 if (isMatch(overlap, mismatches, spec))
-                {
-                    const TRow row2 = row(ret.second, 1);
                     matches.push_back(std::make_tuple(score, overlap, ret.second, std::ref(adapterItem)));
-                }
             }
         }
         if (matches.empty())
             return removed;
 
-        // find best matching adapter
+        // select best matching adapter
         auto maxIt = matches.cbegin();
         for (auto it = matches.cbegin(); it != matches.cend();++it)
             if (std::get<0>(*it)>std::get<0>(*maxIt))
@@ -403,7 +467,6 @@ unsigned stripAdapter(TSeq& seq, AdapterTrimmingStats& stats, TAdapters const& a
         ++stats.numRemoved[adapterItem.id];
 
         stats.overlapSum += overlap;
-
         stats.maxOverlap = std::max(stats.maxOverlap, overlap);
         stats.minOverlap = std::min(stats.minOverlap, overlap);
         // dont try more adapter trimming if the read is too short already
@@ -457,4 +520,3 @@ template < template <typename> class TRead, typename TSeq, typename TAdaptersArr
     return;
 }
 
-#endif  // #ifndef SANDBOX_GROUP3_APPS_SEQDPT_ADAPTERTRIMMING_H_

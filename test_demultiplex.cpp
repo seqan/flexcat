@@ -330,7 +330,6 @@ SEQAN_DEFINE_TEST(matchBarcodes_test)
 
 	int exspected[] = {1,0,3,2,-1,-1,4,};
 	std::vector<int> res(7);
-    const auto numMatched = std::count_if(reads.begin(), reads.end(), [](const auto& read)->auto{return read.demuxResult != 0;});
     MatchBarcodes(reads, BarcodeMatcher);
     for (unsigned i = 0; i < reads.size(); ++i)
 	{
